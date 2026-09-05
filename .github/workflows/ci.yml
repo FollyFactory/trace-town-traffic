@@ -124,3 +124,12 @@ jobs:
 
       - name: Build the container image
         run: docker build -t trace-town-traffic .
+
+      # Bringing SigNoz up in CI means ClickHouse plus schema migrations, which
+      # is slow and flaky for what it proves. Validating that the overlay still
+      # composes catches the failure that actually happens: a typo in it.
+      - name: Validate the compose files
+        run: |
+          docker compose -f deploy/docker-compose.yml config > /dev/null
+          docker compose -f deploy/docker-compose.yml \
+                         -f deploy/docker-compose.signoz.yml config > /dev/null

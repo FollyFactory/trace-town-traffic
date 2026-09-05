@@ -30,6 +30,8 @@ in there, misbehaving in whatever way you tell it to.
 - [Why not just run real services?](#why-not-just-run-real-services)
 - [What it models](#what-it-models)
 - [Quick start](#quick-start)
+- [Running the generator inside the stack](#running-the-generator-inside-the-stack)
+- [SigNoz](#signoz)
 - [Seeing a trace without a backend](#seeing-a-trace-without-a-backend)
 - [The config file](#the-config-file)
 - [Scenarios](#scenarios)
@@ -96,6 +98,7 @@ dotnet run --project src/TraceTown.Traffic -- examples/ecommerce.json
 | Jaeger | <http://localhost:16686> |
 | Prometheus | <http://localhost:9090> |
 | Control API | <http://localhost:8080/api/status> |
+| SigNoz | <http://localhost:3301> — with the SigNoz overlay, see below |
 
 Already have a backend? Skip the compose file:
 
@@ -104,12 +107,73 @@ dotnet run --project src/TraceTown.Traffic -- examples/ecommerce.json \
   --endpoint https://otlp.example.com
 ```
 
-Or in a container:
+## Running the generator inside the stack
+
+The generator is in the compose file behind a profile, so it is off unless you
+ask for it:
+
+```bash
+docker compose -f deploy/docker-compose.yml --profile generator up -d
+```
+
+That builds the image, points it at `http://collector:4318`, and publishes the
+control API on `localhost:8080` — so everything in
+[Driving it at runtime](#driving-it-at-runtime) works the same as when you run it
+on the host.
+
+To change what it runs, override the command:
+
+```yaml
+# deploy/docker-compose.override.yml
+services:
+  generator:
+    command: ["examples/ecommerce.json", "--endpoint", "http://collector:4318",
+              "--scenario", "cascade", "--rate", "3"]
+```
+
+Or use environment variables — `TRAFFIC_SCENARIO`, `TRAFFIC_RATE`,
+`TRAFFIC_DURATION` and the rest are listed under [Command line](#command-line).
+
+Running it on the host against `localhost:4318` is the more convenient loop while
+you are editing a config, since there is no image to rebuild. The profile is for
+when you want the whole thing to come up with one command.
+
+Standalone, without compose:
 
 ```bash
 docker build -t trace-town-traffic .
 docker run --rm -e TRAFFIC_ENDPOINT=http://collector:4318 trace-town-traffic
 ```
+
+## SigNoz
+
+[Trace Town](https://github.com/FollyFactory/trace-town)'s adapter reads from
+SigNoz, so there is an overlay that adds it to the stack:
+
+```bash
+docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.signoz.yml up -d
+```
+
+SigNoz lands on <http://localhost:3301>, and Grafana, Jaeger and Prometheus carry
+on working — the collector fans the same telemetry out to all of them. **Nothing
+about how you run the generator changes**: it still exports to one endpoint and
+the collector does the rest.
+
+> **Create an account at <http://localhost:3301> before expecting any data.**
+> Until SigNoz's first-run setup is complete, its opamp server pushes a `nop`
+> pipeline to its own ingester — port 4317 never opens, the collector logs
+> `connection refused`, and every container looks healthy. It is a one-time step
+> and nothing about the symptoms points at it.
+
+SigNoz deprecated their own Compose manifests in favour of
+[Foundry](https://signoz.io/docs/install/docker/), which is what you should use
+to run SigNoz for real. What is in `deploy/signoz/` is a pinned snapshot of
+Foundry's output, trimmed for local use — a testing stack, not a supported
+deployment. Its service names are load-bearing, because the vendored configs
+address each other by hostname.
+
+SigNoz's ingester is deliberately not published on 4317/4318: the collector
+already owns those on the host, and one ingest endpoint is less to explain.
 
 ## Seeing a trace without a backend
 

@@ -151,6 +151,18 @@ Worth knowing before you build something on top of it:
   names a `postgresqlreceiver` or `redisreceiver` would have used, rather than
   being scraped from anything. The names match so dashboards transfer.
 
+## The bundled stack
+
+One collector owns the host's OTLP ports and fans out to every backend, so the
+generator only ever knows one endpoint. Adding SigNoz is an overlay that appends
+an exporter and merges a second config file into the collector — the collector
+takes multiple `--config` flags and merges them, which is cheaper than
+maintaining two near-identical configs.
+
+Each exporter has its own retry queue, so a backend being down slows nothing else
+down. That is worth knowing the first time you bring up SigNoz and see the
+collector logging `connection refused` while Jaeger keeps filling normally.
+
 ## Performance
 
 The limit is the number of pipelines, not the request rate. Each service costs
