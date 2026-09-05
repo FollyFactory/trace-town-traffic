@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore -c Release
+
+      # `dotnet test` cannot currently discover tests in an xUnit v3 project on
+      # the .NET 10 SDK — it reports zero tests while the same binary runs them
+      # all. `dotnet run` is the Microsoft.Testing.Platform native invocation.
+      - name: Test
+        run: dotnet run --project tests/TraceTown.Traffic.Tests -c Release --no-build
+
+      - name: Check formatting
+        run: dotnet format --verify-no-changes --no-restore
+
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Validate every example
+        run: |
+          for config in examples/*.json; do
+            echo "── $config"
+            dotnet run --project src/TraceTown.Traffic -- "$config" --validate
+          done
+
+      - name: Dry run every example
+        run: |
+          for config in examples/*.json; do
+            dotnet run --project src/TraceTown.Traffic -- "$config" --dry-run > /dev/null
+          done
+
+      - name: Check examples against the JSON schema
+        run: |
+          python3 -m pip install --quiet check-jsonschema
+          # Comments are legal in our config but not in strict JSON, so strip
+          # them before handing the file to a general-purpose validator.
+          mkdir -p /tmp/stripped
+          for config in examples/*.json; do
+            python3 -c "
+          import re, sys
+          src = open('$config').read()
+          open('/tmp/stripped/' + '$config'.split('/')[-1], 'w').write(
+              re.sub(r'^\s*//.*$', '', src, flags=re.M))
+          "
+          done
+          check-jsonschema --schemafile schema/traffic.schema.json /tmp/stripped/*.json
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+
+      - name: Start an OTLP collector
+        run: |
+          cat > /tmp/collector.yaml <<'YAML'
+          receivers:
+            otlp:
+              protocols:
+                http:
+                  endpoint: 0.0.0.0:4318
+          exporters:
+            debug:
+              verbosity: basic
+          service:
+            pipelines:
+              traces:  { receivers: [otlp], exporters: [debug] }
+              metrics: { receivers: [otlp], exporters: [debug] }
+              logs:    { receivers: [otlp], exporters: [debug] }
+          YAML
+          docker run -d --name collector -p 4318:4318 \
+            -v /tmp/collector.yaml:/etc/otel/config.yaml \
+            otel/opentelemetry-collector-contrib:0.140.0 --config=/etc/otel/config.yaml
+          for _ in $(seq 1 30); do
+            curl -sf -o /dev/null -X POST http://localhost:4318/v1/traces \
+              -H 'Content-Type: application/json' -d '{}' && break
+            sleep 1
+          done
+
+      # The point is to prove telemetry actually reaches a collector, not just
+      # that the process starts.
+      - name: Generate telemetry
+        run: |
+          dotnet run --project src/TraceTown.Traffic -- examples/ecommerce.json \
+            --endpoint http://localhost:4318 --duration 20s --sample 1.0 --no-control --seed 1
+
+      - name: Assert the collector received all three signals
+        run: |
+          logs=$(docker logs collector 2>&1)
+          echo "$logs" | tail -40
+          for signal in Traces Metrics Logs; do
+            echo "$logs" | grep -q "$signal" \
+              || { echo "::error::collector received no $signal"; exit 1; }
+          done
+
+      - name: Build the container image
+        run: docker build -t trace-town-traffic .
