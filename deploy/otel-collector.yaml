@@ -1,0 +1,67 @@
+# Collector config for the bundled stack. The generator speaks plain OTLP, so
+# nothing here is required to use the tool — swap this out for whatever your
+# own pipeline looks like.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 2s
+    send_batch_size: 2048
+
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 20
+
+  # Promote the simulated service identity onto every metric as a label, so a
+  # Prometheus query can group by service without going through resource
+  # attributes. Real deployments often do exactly this.
+  resource:
+    attributes:
+      - key: collector.name
+        value: trace-town-traffic
+        action: upsert
+
+exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  otlphttp/prometheus:
+    endpoint: http://prometheus:9090/api/v1/otlp
+
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+
+  # Uncomment to watch telemetry go past on the collector's own stdout.
+  # debug:
+  #   verbosity: detailed
+
+service:
+  telemetry:
+    logs:
+      level: info
+
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlp/jaeger]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlphttp/prometheus]
+
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlphttp/loki]

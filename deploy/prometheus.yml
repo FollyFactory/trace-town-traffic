@@ -1,0 +1,26 @@
+# Prometheus is a receiver here, not a scraper: the collector pushes metrics in
+# over OTLP, which is why the container runs with --web.enable-otlp-receiver.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Keeping resource attributes as labels is what makes service.namespace and
+# service.instance.id available to group by.
+otlp:
+  promote_resource_attributes:
+    - service.name
+    - service.namespace
+    - service.version
+    - service.instance.id
+    - deployment.environment.name
+    - trace_town.kind
+    - trace_town.town
+
+storage:
+  tsdb:
+    out_of_order_time_window: 30m
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
