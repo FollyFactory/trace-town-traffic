@@ -1,6 +1,13 @@
-# SigNoz, as an overlay on the main stack:
+# SigNoz, as an overlay on the main stack. Export COMPOSE_FILE once so that
+# every later command picks up both files:
 #
-#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.signoz.yml up -d
+#   export COMPOSE_FILE=deploy/docker-compose.yml:deploy/docker-compose.signoz.yml
+#   docker compose up -d
+#   docker compose --profile generator up -d
+#
+# Passing only the base -f file on a later command recreates the collector
+# without the SigNoz exporter below. Nothing errors, every container stays
+# healthy, and telemetry silently stops reaching SigNoz.
 #
 # SigNoz UI            http://localhost:3301
 # Everything else      unchanged — Grafana, Jaeger and Prometheus keep working

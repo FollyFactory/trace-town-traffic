@@ -37,6 +37,7 @@ in there, misbehaving in whatever way you tell it to.
 - [Scenarios](#scenarios)
 - [Driving it at runtime](#driving-it-at-runtime)
 - [Command line](#command-line)
+- [Troubleshooting](#troubleshooting)
 - [Docs](#docs)
 
 ## Why not just run real services?
@@ -148,11 +149,24 @@ docker run --rm -e TRAFFIC_ENDPOINT=http://collector:4318 trace-town-traffic
 ## SigNoz
 
 [Trace Town](https://github.com/FollyFactory/trace-town)'s adapter reads from
-SigNoz, so there is an overlay that adds it to the stack:
+SigNoz, so there is an overlay that adds it to the stack. Export `COMPOSE_FILE`
+once and every later `docker compose` command picks up both files:
 
 ```bash
-docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.signoz.yml up -d
+export COMPOSE_FILE=deploy/docker-compose.yml:deploy/docker-compose.signoz.yml
+
+docker compose up -d                      # the stack, with SigNoz
+docker compose --profile generator up -d  # and the generator alongside it
+docker compose logs -f collector
 ```
+
+> **Use `COMPOSE_FILE`, or pass both `-f` flags on every single command.**
+> Running `docker compose -f deploy/docker-compose.yml … up -d` with only the
+> base file recreates the collector *without* the SigNoz exporter. SigNoz keeps
+> running and every container stays healthy — telemetry simply stops arriving.
+> This is the most likely reason for an empty SigNoz, and
+> [Troubleshooting](#nothing-is-arriving-in-signoz) has the one-liner that
+> confirms it.
 
 SigNoz lands on <http://localhost:3301>, and Grafana, Jaeger and Prometheus carry
 on working — the collector fans the same telemetry out to all of them. **Nothing
@@ -359,6 +373,66 @@ Environment variables override the file and are overridden by the flags:
 `TRAFFIC_SEED`, `TRAFFIC_CONTROL_HOST`, `TRAFFIC_CONTROL_PORT`,
 `TRAFFIC_CONTROL_TOKEN`. `OTEL_EXPORTER_OTLP_ENDPOINT` is honoured too, since
 anything running beside real instrumented services will already have it set.
+
+## Troubleshooting
+
+### Nothing is arriving in SigNoz
+
+Two causes account for almost all of it, and neither announces itself — every
+container reports healthy in both cases.
+
+**1. The collector is running without the SigNoz exporter.** Check what config it
+actually loaded:
+
+```bash
+docker inspect trace-town-traffic-collector-1 --format '{{json .Config.Cmd}}'
+```
+
+```
+["--config=/etc/otel/config.yaml","--config=/etc/otel/signoz.yaml"]   ✅
+["--config=/etc/otel/config.yaml"]                                    ❌ overlay dropped
+```
+
+If the second, a compose command ran with only the base `-f` file and recreated
+the collector from it. Bring it back with both files, or set `COMPOSE_FILE` as
+above.
+
+**2. SigNoz's first-run setup is not complete.**
+
+```bash
+curl -s localhost:3301/api/v1/version
+```
+
+`"setupCompleted": false` means no account exists yet. Until one does, SigNoz's
+opamp server pushes a `nop` pipeline to its own ingester: port 4317 never opens
+and the collector logs `connection refused`. Create an account at
+<http://localhost:3301> and the pipeline comes up within about ten seconds.
+
+**Then confirm data is actually landing**, without going through the UI or its
+auth:
+
+```bash
+docker exec signoz-telemetrystore-clickhouse-0-0 clickhouse-client --query "
+  SELECT 'traces' s, count() n FROM signoz_traces.distributed_signoz_index_v3
+  UNION ALL SELECT 'logs',    count() FROM signoz_logs.distributed_logs_v2
+  UNION ALL SELECT 'metrics', count() FROM signoz_metrics.distributed_samples_v4
+  FORMAT TSV"
+```
+
+Logs lag well behind traces — they are only emitted for errors and for sampled
+requests, so a low count there is expected rather than a fault.
+
+### Nothing is arriving anywhere
+
+Check the generator is actually producing, and where it thinks it is sending:
+
+```bash
+curl -s localhost:8080/api/status
+```
+
+`counts.requests` climbing with `counts.spans` at zero means sampling, not a
+broken pipeline — the default only traces 10% of requests. Run with
+`--sample 1.0` while debugging.
 
 ## Docs
 
