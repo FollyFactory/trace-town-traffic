@@ -233,3 +233,27 @@ people to write queries that will break:
 They are all pinned in one file,
 [`src/TraceTown.Traffic/Emit/SemConv.cs`](../src/TraceTown.Traffic/Emit/SemConv.cs),
 so there is one place to check them against the spec and one place to change.
+
+### Both names are emitted, on purpose
+
+By default the superseded names go out **alongside** the current ones —
+`db.system` next to `db.system.name`, and so on. This mirrors what the
+OpenTelemetry SDKs themselves do during a rename, via
+`OTEL_SEMCONV_STABILITY_OPT_IN=database/dup`.
+
+It is not a nicety. **SigNoz builds its service map from `db.system`.** Emit only
+`db.system.name` and every database, cache and broker silently disappears from
+its dependency graph — while the traces themselves look completely correct, because
+they are. Nothing errors, nothing warns, and the spans carry perfectly valid
+modern attributes. You just get a service map with the infrastructure missing.
+Other backends have the same lag.
+
+Correct-but-invisible is the worst possible default for a tool whose entire job
+is to produce data other tools can read, so the default is to emit both:
+
+```json
+"exporter": { "semanticConventions": "dup" }     // default
+"exporter": { "semanticConventions": "latest" }  // current names only
+```
+
+Use `latest` when you are specifically testing whether something has migrated.

@@ -86,6 +86,33 @@ internal static class SemConv
     internal const string ErrorType = "error.type";
 
     /// <summary>
+    /// Attribute names that were renamed by the conventions, paired with the
+    /// name they replaced.
+    /// </summary>
+    /// <remarks>
+    /// Emitting both is what OpenTelemetry's own SDKs do during a transition,
+    /// via <c>OTEL_SEMCONV_STABILITY_OPT_IN=database/dup</c>, and it is not
+    /// optional in practice: SigNoz builds its service map from
+    /// <c>db.system</c>, so a generator emitting only <c>db.system.name</c> is
+    /// invisible to it — every database and cache silently disappears from the
+    /// dependency graph while the traces themselves look perfectly correct.
+    /// Other backends key on the old names too.
+    /// </remarks>
+    internal static readonly (string Current, string Superseded)[] RenamedSpanAttributes =
+    [
+        (Db.SystemName, "db.system"),
+        (Db.Namespace, "db.name"),
+        (Db.QueryText, "db.statement"),
+        (Db.OperationName, "db.operation"),
+        (Db.CollectionName, "db.sql.table"),
+    ];
+
+    internal static readonly (string Current, string Superseded)[] RenamedResourceAttributes =
+    [
+        (Resource.DeploymentEnvironment, "deployment.environment"),
+    ];
+
+    /// <summary>
     /// Metrics a collector receiver would scrape from the component itself,
     /// rather than anything an application SDK produces. Named to match the
     /// receivers people actually run, so a dashboard written against a real

@@ -23,9 +23,11 @@ public sealed class TelemetryEmitter : IDisposable
 {
     private readonly Dictionary<string, ServicePipeline> _pipelines;
     private readonly HttpClient _http;
+    private readonly bool _emitSupersededNames;
 
     public TelemetryEmitter(Topology topology, TrafficConfig config)
     {
+        _emitSupersededNames = config.Exporter.SemanticConventions == SemanticConventionMode.Dup;
         _http = new HttpClient { Timeout = TimeSpan.FromMilliseconds(config.Exporter.TimeoutMs) };
         _pipelines = topology.Services.ToDictionary(
             s => s.Id,
@@ -83,6 +85,11 @@ public sealed class TelemetryEmitter : IDisposable
                 foreach ((string key, object? value) in plan.Attributes)
                 {
                     activity.SetTag(key, value);
+
+                    if (_emitSupersededNames)
+                    {
+                        SetSupersededName(activity, key, value);
+                    }
                 }
 
                 if (plan.Instance is { } instance)
@@ -270,6 +277,22 @@ public sealed class TelemetryEmitter : IDisposable
         foreach (ServicePipeline pipeline in _pipelines.Values)
         {
             pipeline.ForceFlush((int)timeout.TotalMilliseconds);
+        }
+    }
+
+    /// <summary>
+    /// Mirrors a renamed attribute onto the name it replaced, so backends that
+    /// have not migrated still recognise the span for what it is.
+    /// </summary>
+    private static void SetSupersededName(Activity activity, string key, object? value)
+    {
+        foreach ((string current, string superseded) in SemConv.RenamedSpanAttributes)
+        {
+            if (key == current)
+            {
+                activity.SetTag(superseded, value);
+                return;
+            }
         }
     }
 

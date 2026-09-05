@@ -111,3 +111,40 @@ public class ConfigLoaderTests
         error.Message.ShouldContain("line");
     }
 }
+
+public class SemanticConventionTests
+{
+    [Fact]
+    public void Duplicates_superseded_names_by_default()
+    {
+        TrafficConfig config = ConfigLoader.Parse("""{ "services": [ { "id": "a", "kind": "api" } ] }""");
+
+        // Correct-but-invisible is the worst default: SigNoz builds its service
+        // map from db.system, so emitting only db.system.name makes every
+        // database vanish while the traces still look right.
+        config.Exporter.SemanticConventions.ShouldBe(SemanticConventionMode.Dup);
+    }
+
+    [Fact]
+    public void Can_be_narrowed_to_current_names_only()
+    {
+        TrafficConfig config = ConfigLoader.Parse("""
+            {
+              "exporter": { "semanticConventions": "latest" },
+              "services": [ { "id": "a", "kind": "api" } ]
+            }
+            """);
+
+        config.Exporter.SemanticConventions.ShouldBe(SemanticConventionMode.Latest);
+    }
+
+    [Fact]
+    public void Every_renamed_attribute_maps_to_a_different_name()
+    {
+        foreach ((string current, string superseded) in SemConvNames.SpanRenames)
+        {
+            current.ShouldNotBe(superseded);
+            superseded.ShouldNotBeNullOrWhiteSpace();
+        }
+    }
+}

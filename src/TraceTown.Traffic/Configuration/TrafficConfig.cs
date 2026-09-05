@@ -74,6 +74,28 @@ public sealed record ExporterConfig
     public int MetricIntervalMs { get; init; } = 10_000;
 
     public int TimeoutMs { get; init; } = 10_000;
+
+    /// <summary>
+    /// Whether to emit superseded attribute names alongside the current ones.
+    /// Defaults to <see cref="SemanticConventionMode.Dup"/> because several
+    /// backends still key on the old names — SigNoz builds its service map from
+    /// <c>db.system</c>, and without it every database and cache vanishes from
+    /// the dependency graph while the traces themselves look correct.
+    /// </summary>
+    public SemanticConventionMode SemanticConventions { get; init; } = SemanticConventionMode.Dup;
+}
+
+/// <summary>
+/// Mirrors OpenTelemetry's own <c>OTEL_SEMCONV_STABILITY_OPT_IN</c> switch.
+/// </summary>
+[JsonConverter(typeof(FlexibleEnumConverter<SemanticConventionMode>))]
+public enum SemanticConventionMode
+{
+    /// <summary>Emit the current names and the ones they replaced. The default.</summary>
+    Dup,
+
+    /// <summary>Emit only the current names. Correct, and invisible to some backends.</summary>
+    Latest,
 }
 
 [JsonConverter(typeof(FlexibleEnumConverter<OtlpProtocol>))]

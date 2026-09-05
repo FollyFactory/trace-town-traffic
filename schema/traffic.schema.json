@@ -67,7 +67,12 @@
         "metrics": { "type": "boolean", "default": true },
         "logs": { "type": "boolean", "default": true },
         "metricIntervalMs": { "type": "integer", "minimum": 100, "default": 10000 },
-        "timeoutMs": { "type": "integer", "minimum": 1, "default": 10000 }
+        "timeoutMs": { "type": "integer", "minimum": 1, "default": 10000 },
+        "semanticConventions": {
+          "enum": ["dup", "latest"],
+          "default": "dup",
+          "description": "dup also emits superseded attribute names (db.system alongside db.system.name). Required by backends that have not migrated — SigNoz builds its service map from db.system."
+        }
       }
     },
 

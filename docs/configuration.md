@@ -59,9 +59,18 @@ no flow can reach.
 | `logs` | bool | `true` | |
 | `metricIntervalMs` | int | `10000` | Export interval. Match your backend's resolution |
 | `timeoutMs` | int | `10000` | |
+| `semanticConventions` | `dup` \| `latest` | `dup` | Whether to also emit superseded attribute names |
 
 With `httpProtobuf` the signal paths (`/v1/traces` and so on) are appended to
 the endpoint. With `grpc` the endpoint is used as given.
+
+`semanticConventions: "dup"` emits `db.system` alongside `db.system.name`, and
+so on, the way OpenTelemetry's own SDKs do during a rename
+(`OTEL_SEMCONV_STABILITY_OPT_IN=database/dup`). It defaults to on because SigNoz
+builds its service map from `db.system` — with only the current names, every
+database and cache vanishes from its dependency graph while the traces look
+perfectly correct. `latest` emits current names only. See
+[telemetry-model.md](telemetry-model.md#both-names-are-emitted-on-purpose).
 
 Turning a signal off is genuinely useful: `"metrics": false` while you are
 debugging trace shapes keeps a backend from filling with data you are not

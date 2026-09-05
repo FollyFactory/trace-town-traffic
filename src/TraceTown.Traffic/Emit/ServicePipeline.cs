@@ -119,6 +119,17 @@ internal sealed class ServicePipeline : IDisposable
             ["trace_town.simulated"] = true,
         };
 
+        if (config.Exporter.SemanticConventions == SemanticConventionMode.Dup)
+        {
+            foreach ((string current, string superseded) in SemConv.RenamedResourceAttributes)
+            {
+                if (attributes.TryGetValue(current, out object? value))
+                {
+                    attributes[superseded] = value;
+                }
+            }
+        }
+
         foreach ((string key, string value) in config.Town.Resource)
         {
             attributes[key] = value;

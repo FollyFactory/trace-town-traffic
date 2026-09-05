@@ -422,6 +422,19 @@ docker exec signoz-telemetrystore-clickhouse-0-0 clickhouse-client --query "
 Logs lag well behind traces — they are only emitted for errors and for sampled
 requests, so a low count there is expected rather than a fault.
 
+### SigNoz shows the services but no databases, caches or queues
+
+Expected until you are on a build that emits both attribute spellings — SigNoz
+classifies a span as a database call from `db.system`, which the conventions
+renamed to `db.system.name`. The generator emits both by default
+(`exporter.semanticConventions: "dup"`); if you have set it to `latest`, that is
+why.
+
+Note that SigNoz names infrastructure nodes after the *system* rather than the
+instance, so five simulated Postgres services collapse into one `postgresql`
+node in its dependency graph. That is SigNoz's model, not something the
+generator controls.
+
 ### Nothing is arriving anywhere
 
 Check the generator is actually producing, and where it thinks it is sending:
