@@ -1,0 +1,21 @@
+# Overlay fragment, merged on top of otel-collector.yaml by passing both files
+# to the collector. It adds SigNoz as an extra destination; the vendor-neutral
+# backends carry on receiving everything they did before.
+#
+# The generator does not need to know about any of this. It exports to one
+# endpoint and the collector fans out, which is what a collector is for.
+
+exporters:
+  otlp/signoz:
+    endpoint: signoz-ingester:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      exporters: [otlp/jaeger, otlp/signoz]
+    metrics:
+      exporters: [otlphttp/prometheus, otlp/signoz]
+    logs:
+      exporters: [otlphttp/loki, otlp/signoz]

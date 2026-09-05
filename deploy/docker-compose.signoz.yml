@@ -1,0 +1,191 @@
+# SigNoz, as an overlay on the main stack:
+#
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.signoz.yml up -d
+#
+# SigNoz UI            http://localhost:3301
+# Everything else      unchanged — Grafana, Jaeger and Prometheus keep working
+#
+# ┌───────────────────────────────────────────────────────────────────────────┐
+# │ FIRST RUN: create an account at http://localhost:3301 before expecting    │
+# │ any data. Until setup is complete, SigNoz's opamp server pushes a `nop`   │
+# │ pipeline to its ingester, so port 4317 never opens and the collector logs │
+# │ "connection refused" while everything looks healthy. This is a one-time   │
+# │ step and it is not obvious from any of the symptoms.                      │
+# └───────────────────────────────────────────────────────────────────────────┘
+#
+# The generator still exports to one endpoint. This overlay only adds a second
+# destination behind the collector, so nothing about how you run the generator
+# changes.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# This is a snapshot of the deployment Foundry generates, pinned and trimmed for
+# local use. SigNoz deprecated their own Compose manifests in favour of Foundry
+# (https://signoz.io/docs/install/docker/), which is what you should use to run
+# SigNoz for real. What is here is a testing stack, not a supported deployment.
+#
+# The service names are load-bearing: the vendored configs in deploy/signoz/
+# address each other by hostname, so renaming a service breaks it.
+
+services:
+  # Our collector gains SigNoz as an additional exporter. Both config files are
+  # passed and the collector merges them.
+  collector:
+    command:
+      - --config=/etc/otel/config.yaml
+      - --config=/etc/otel/signoz.yaml
+    volumes:
+      - ./otel-collector.yaml:/etc/otel/config.yaml:ro
+      - ./otel-collector.signoz.yaml:/etc/otel/signoz.yaml:ro
+    depends_on:
+      signoz-ingester:
+        condition: service_started
+
+  # SigNoz's own collector, which writes into ClickHouse in SigNoz's schema.
+  # Deliberately not published on 4317/4318 — our collector already owns those
+  # on the host, and one ingest endpoint is less to explain.
+  signoz-ingester:
+    image: signoz/signoz-otel-collector:v0.144.9
+    container_name: signoz-ingester
+    entrypoint: ["/bin/sh"]
+    command:
+      - -c
+      - |
+        /signoz-otel-collector migrate sync check &&
+        /signoz-otel-collector --config=/etc/otel-collector-config.yaml --manager-config=/etc/opamp-config.yaml --copy-path=/var/tmp/collector-config.yaml
+    environment:
+      SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_DSN: tcp://signoz-telemetrystore-clickhouse-0-0:9000
+      SIGNOZ_OTEL_COLLECTOR_TIMEOUT: 10m
+      LOW_CARDINAL_EXCEPTION_GROUPING: "false"
+    volumes:
+      - ./signoz/ingester/ingester.yaml:/etc/otel-collector-config.yaml:ro
+      - ./signoz/ingester/opamp.yaml:/etc/opamp-config.yaml:ro
+    depends_on:
+      signoz-telemetrystore-migrator:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  signoz:
+    image: signoz/signoz:v0.140.0
+    container_name: signoz-signoz-0
+    environment:
+      SIGNOZ_SQLSTORE_PROVIDER: postgres
+      SIGNOZ_SQLSTORE_POSTGRES_DSN: postgres://signoz:signoz@signoz-metastore-postgres-0:5432/signoz?sslmode=disable
+      SIGNOZ_TELEMETRYSTORE_PROVIDER: clickhouse
+      SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN: tcp://signoz-telemetrystore-clickhouse-0-0:9000
+    ports:
+      # SigNoz serves on 8080, which the generator's control API already uses
+      # on the host. 3301 is SigNoz's own historical port.
+      - "3301:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    depends_on:
+      signoz-metastore-postgres-0:
+        condition: service_healthy
+      signoz-telemetrystore-clickhouse-0-0:
+        condition: service_healthy
+    restart: unless-stopped
+
+  signoz-metastore-postgres-0:
+    image: postgres:16
+    container_name: signoz-metastore-postgres-0
+    environment:
+      POSTGRES_DB: signoz
+      POSTGRES_USER: signoz
+      POSTGRES_PASSWORD: signoz
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U signoz -d signoz"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - signoz-postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  signoz-telemetrykeeper-clickhousekeeper-0:
+    image: clickhouse/clickhouse-keeper:25.12.5
+    container_name: signoz-telemetrykeeper-clickhousekeeper-0
+    entrypoint: ["/usr/bin/clickhouse-keeper", "--config-file=/etc/clickhouse-keeper/keeper.yaml"]
+    healthcheck:
+      test: ["CMD", "clickhouse-keeper-client", "-h", "localhost", "-p", "9181", "-q", "ls"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    volumes:
+      - signoz-keeper-data:/var/lib/clickhouse-keeper
+      - ./signoz/telemetrykeeper/keeper.yaml:/etc/clickhouse-keeper/keeper.yaml:ro
+    restart: unless-stopped
+
+  signoz-telemetrystore-clickhouse-0-0:
+    image: clickhouse/clickhouse-server:25.12.5
+    container_name: signoz-telemetrystore-clickhouse-0-0
+    environment:
+      CLICKHOUSE_SKIP_USER_SETUP: "1"
+      CLICKHOUSE_CONFIG: /etc/clickhouse-server/config-0-0.yaml
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    volumes:
+      - signoz-clickhouse-data:/var/lib/clickhouse
+      - signoz-clickhouse-user-scripts:/var/lib/clickhouse/user_scripts:ro
+      - ./signoz/telemetrystore/config.yaml:/etc/clickhouse-server/config-0-0.yaml:ro
+      - ./signoz/telemetrystore/functions.yaml:/etc/clickhouse-server/functions.yaml:ro
+    depends_on:
+      signoz-telemetrykeeper-clickhousekeeper-0:
+        condition: service_healthy
+      signoz-clickhouse-user-scripts:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ClickHouse calls out to a helper binary for histogram quantiles, and SigNoz
+  # fetches it at start-up rather than baking it into the image.
+  signoz-clickhouse-user-scripts:
+    image: clickhouse/clickhouse-server:25.12.5
+    container_name: signoz-clickhouse-user-scripts
+    command:
+      - bash
+      - -c
+      - |-
+        version="v0.0.1"
+        node_os=$$(uname -s | tr '[:upper:]' '[:lower:]')
+        node_arch=$$(uname -m | sed s/aarch64/arm64/ | sed s/x86_64/amd64/)
+        cd /tmp
+        wget -O histogram-quantile.tar.gz "https://github.com/SigNoz/signoz/releases/download/histogram-quantile%2F$${version}/histogram-quantile_$${node_os}_$${node_arch}.tar.gz"
+        tar -xvzf histogram-quantile.tar.gz
+        mv histogram-quantile /var/lib/clickhouse/user_scripts/histogramQuantile
+    volumes:
+      - signoz-clickhouse-user-scripts:/var/lib/clickhouse/user_scripts
+    restart: on-failure
+
+  signoz-telemetrystore-migrator:
+    image: signoz/signoz-otel-collector:v0.144.9
+    container_name: signoz-telemetrystore-migrator
+    entrypoint: ["/bin/sh"]
+    command:
+      - -c
+      - |
+        /signoz-otel-collector migrate ready &&
+        /signoz-otel-collector migrate bootstrap &&
+        /signoz-otel-collector migrate sync up &&
+        /signoz-otel-collector migrate async up
+    environment:
+      SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_DSN: tcp://signoz-telemetrystore-clickhouse-0-0:9000
+      SIGNOZ_OTEL_COLLECTOR_TIMEOUT: 10m
+    depends_on:
+      signoz-telemetrystore-clickhouse-0-0:
+        condition: service_healthy
+    restart: on-failure
+
+volumes:
+  signoz-postgres-data:
+  signoz-keeper-data:
+  signoz-clickhouse-data:
+  signoz-clickhouse-user-scripts:
