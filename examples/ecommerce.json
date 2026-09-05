@@ -1,0 +1,442 @@
+{
+  "$schema": "../schema/traffic.schema.json",
+
+  "town": {
+    "name": "shopfront",
+    "environment": "production",
+    "resource": {
+      "cloud.provider": "aws",
+      "cloud.region": "eu-west-2"
+    }
+  },
+
+  "exporter": {
+    "endpoint": "http://localhost:4318",
+    "protocol": "httpProtobuf",
+    "metricIntervalMs": 10000
+  },
+
+  "simulation": {
+    "tickMs": 250,
+    "traceSampleRatio": 0.1,
+    "errorTraceSampleRatio": 1.0,
+    "seed": 1848
+  },
+
+  "control": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8080
+  },
+
+  "services": [
+    {
+      "id": "edge-gateway",
+      "kind": "gateway",
+      "group": "edge",
+      "instances": 3,
+      "latency": { "p50Ms": 2, "p99Ms": 8 },
+      "dependencies": [
+        { "target": "web-bff", "operation": "POST /graphql" }
+      ]
+    },
+    {
+      "id": "web-bff",
+      "kind": "api",
+      "group": "edge",
+      "instances": 3,
+      "latency": { "p50Ms": 6, "p99Ms": 30 },
+      "errorRate": 0.0005,
+      "dependencies": [
+        { "target": "catalog-api", "operation": "GET /products" },
+        { "target": "search-api", "operation": "GET /search", "probability": 0.35 },
+        { "target": "checkout-api", "operation": "POST /orders", "probability": 0.08 },
+        { "target": "inventory-api", "operation": "GET /stock", "probability": 0.4 }
+      ]
+    },
+
+    {
+      "id": "catalog-api",
+      "kind": "api",
+      "group": "catalog",
+      "instances": 4,
+      "latency": { "p50Ms": 8, "p99Ms": 45 },
+      "errorRate": 0.001,
+      "dependencies": [
+        { "target": "redis-catalog", "operation": "GET product" },
+        // Only reached on a cache miss, so the probability is the miss rate.
+        { "target": "postgres-catalog", "operation": "SELECT products", "probability": 0.12 }
+      ]
+    },
+    {
+      "id": "search-api",
+      "kind": "api",
+      "group": "catalog",
+      "instances": 2,
+      "latency": { "p50Ms": 25, "p99Ms": 180 },
+      "errorRate": 0.002,
+      "dependencies": [
+        { "target": "elasticsearch", "operation": "SELECT products" }
+      ]
+    },
+    {
+      "id": "inventory-api",
+      "kind": "api",
+      "group": "fulfilment",
+      "instances": 2,
+      "latency": { "p50Ms": 10, "p99Ms": 60 },
+      "dependencies": [
+        { "target": "postgres-inventory", "operation": "SELECT stock_levels" }
+      ]
+    },
+
+    {
+      "id": "checkout-api",
+      "kind": "api",
+      "group": "orders",
+      "instances": 3,
+      "latency": { "p50Ms": 20, "p99Ms": 120 },
+      "errorRate": 0.002,
+      "dependencies": [
+        { "target": "redis-sessions", "operation": "GET session" },
+        { "target": "postgres-orders", "operation": "INSERT orders" },
+        { "target": "inventory-api", "operation": "POST /reservations" },
+        { "target": "payments-api", "operation": "POST /charges" },
+        { "target": "orders-topic", "operation": "orders.placed" }
+      ]
+    },
+    {
+      "id": "payments-api",
+      "kind": "api",
+      "group": "orders",
+      "instances": 2,
+      "latency": { "p50Ms": 15, "p99Ms": 90 },
+      "errorRate": 0.003,
+      "dependencies": [
+        { "target": "postgres-payments", "operation": "INSERT payments" },
+        { "target": "stripe", "operation": "POST /v1/charges" }
+      ]
+    },
+
+    {
+      "id": "order-worker",
+      "kind": "worker",
+      "group": "orders",
+      "instances": 2,
+      "latency": { "p50Ms": 40, "p99Ms": 300 },
+      "consumes": [
+        { "queue": "orders-topic", "destination": "orders.placed", "lagMs": 120 }
+      ],
+      "dependencies": [
+        { "target": "postgres-orders", "operation": "UPDATE orders" },
+        { "target": "inventory-api", "operation": "POST /allocations" },
+        { "target": "email-queue", "operation": "email.order-confirmation" }
+      ]
+    },
+    {
+      "id": "email-worker",
+      "kind": "worker",
+      "group": "notifications",
+      "instances": 2,
+      "latency": { "p50Ms": 30, "p99Ms": 200 },
+      "consumes": [
+        { "queue": "email-queue", "destination": "email.order-confirmation", "lagMs": 400, "errorRate": 0.01 }
+      ],
+      "dependencies": [
+        { "target": "sendgrid", "operation": "POST /v3/mail/send" }
+      ]
+    },
+
+    {
+      "id": "orders-topic",
+      "kind": "queue",
+      "group": "orders",
+      "latency": { "p50Ms": 2, "p99Ms": 12 },
+      "queue": { "system": "kafka", "destination": "orders.placed", "partitions": 6 }
+    },
+    {
+      "id": "email-queue",
+      "kind": "queue",
+      "group": "notifications",
+      "latency": { "p50Ms": 1, "p99Ms": 6 },
+      "queue": { "system": "rabbitmq", "destination": "email.order-confirmation", "partitions": 1 }
+    },
+
+    {
+      "id": "postgres-orders",
+      "kind": "database",
+      "group": "orders",
+      "latency": { "p50Ms": 4, "p99Ms": 40 },
+      "database": { "system": "postgresql", "namespace": "orders", "maxConnections": 200, "slowQueryMs": 500 }
+    },
+    {
+      "id": "postgres-payments",
+      "kind": "database",
+      "group": "orders",
+      "latency": { "p50Ms": 5, "p99Ms": 45 },
+      "database": { "system": "postgresql", "namespace": "payments", "maxConnections": 100 }
+    },
+    {
+      "id": "postgres-catalog",
+      "kind": "database",
+      "group": "catalog",
+      "latency": { "p50Ms": 6, "p99Ms": 70 },
+      "database": { "system": "postgresql", "namespace": "catalog", "maxConnections": 100 }
+    },
+    {
+      "id": "postgres-inventory",
+      "kind": "database",
+      "group": "fulfilment",
+      "latency": { "p50Ms": 3, "p99Ms": 25 },
+      "database": { "system": "postgresql", "namespace": "inventory", "maxConnections": 100 }
+    },
+    {
+      "id": "elasticsearch",
+      "kind": "database",
+      "group": "catalog",
+      "latency": { "p50Ms": 18, "p99Ms": 160 },
+      "database": { "system": "elasticsearch", "namespace": "products", "maxConnections": 50, "slowQueryMs": 300 }
+    },
+
+    {
+      "id": "redis-sessions",
+      "kind": "cache",
+      "group": "orders",
+      "latency": { "p50Ms": 0.4, "p99Ms": 3 },
+      "cache": { "system": "redis", "hitRate": 0.98, "memoryBytes": 402653184, "maxMemoryBytes": 536870912 }
+    },
+    {
+      "id": "redis-catalog",
+      "kind": "cache",
+      "group": "catalog",
+      "latency": { "p50Ms": 0.5, "p99Ms": 4 },
+      "cache": { "system": "redis", "hitRate": 0.88, "memoryBytes": 1073741824, "maxMemoryBytes": 2147483648 }
+    },
+
+    {
+      "id": "stripe",
+      "kind": "external",
+      "group": "third-party",
+      "latency": { "p50Ms": 120, "p99Ms": 600, "floorMs": 40 },
+      "errorRate": 0.004
+    },
+    {
+      "id": "sendgrid",
+      "kind": "external",
+      "group": "third-party",
+      "latency": { "p50Ms": 90, "p99Ms": 500, "floorMs": 30 },
+      "errorRate": 0.008
+    },
+
+    {
+      "id": "nightly-reconciliation",
+      "kind": "cron",
+      "group": "orders",
+      "latency": { "p50Ms": 800, "p99Ms": 4000 },
+      "cron": { "every": "10m", "jitter": "30s", "job": "reconcile-payments" },
+      "dependencies": [
+        { "target": "postgres-orders", "operation": "SELECT orders", "calls": 3, "callsMax": 12 },
+        { "target": "postgres-payments", "operation": "SELECT payments", "calls": 3, "callsMax": 12 }
+      ]
+    }
+  ],
+
+  "flows": [
+    {
+      "id": "browse",
+      "entry": "edge-gateway",
+      "route": "GET /api/products",
+      "rps": 60,
+      "profile": { "kind": "diurnal", "amplitude": 0.4, "jitter": 0.08 },
+      "clientErrorRate": 0.01,
+      "except": ["checkout-api", "search-api"]
+    },
+    {
+      "id": "search",
+      "entry": "edge-gateway",
+      "route": "GET /api/search",
+      "rps": 18,
+      "profile": { "kind": "diurnal", "amplitude": 0.5 },
+      "always": ["search-api"],
+      "except": ["checkout-api"]
+    },
+    {
+      "id": "checkout",
+      "entry": "edge-gateway",
+      "route": "POST /api/checkout",
+      "rps": 6,
+      "profile": { "kind": "diurnal", "amplitude": 0.6 },
+      "clientErrorRate": 0.02,
+      "always": ["checkout-api"],
+      "except": ["search-api", "catalog-api"]
+    },
+    {
+      "id": "health",
+      "entry": "edge-gateway",
+      "route": "GET /healthz",
+      "rps": 2,
+      "depth": 0
+    }
+  ],
+
+  "scenarios": [
+    {
+      "id": "calm",
+      "description": "Everything healthy. The baseline the other scenarios deviate from.",
+      "steps": [
+        { "at": "0s", "note": "All clear", "clear": true }
+      ]
+    },
+
+    {
+      "id": "degrading",
+      "description": "One service quietly gets worse. Should read as 'something is wrong over there', not a general alarm.",
+      "steps": [
+        { "at": "0s", "note": "Baseline", "clear": true },
+        {
+          "at": "30s",
+          "note": "search-api starts slowing down",
+          "faults": [
+            {
+              "target": "elasticsearch",
+              "kind": "latency",
+              "p50Ms": 250,
+              "p99Ms": 1800,
+              "ramp": "2m",
+              "because": "index merge pressure"
+            }
+          ]
+        },
+        {
+          "at": "3m",
+          "note": "Errors follow the latency",
+          "faults": [
+            { "target": "search-api", "kind": "errors", "errorRate": 0.08, "ramp": "1m" }
+          ]
+        }
+      ]
+    },
+
+    {
+      "id": "cascade",
+      "description": "A third party slows, its caller backs up, pressure walks upstream to the edge.",
+      "loop": true,
+      "steps": [
+        { "at": "0s", "note": "Baseline", "clear": true },
+        {
+          "at": "30s",
+          "note": "Stripe latency climbs",
+          "faults": [
+            { "target": "stripe", "kind": "latency", "p50Ms": 2500, "p99Ms": 9000, "ramp": "60s", "because": "upstream provider degradation" }
+          ]
+        },
+        {
+          "at": "2m",
+          "note": "payments-api connection pool saturates waiting on Stripe",
+          "faults": [
+            { "target": "payments-api", "kind": "saturation", "ramp": "45s" },
+            { "target": "postgres-payments", "kind": "saturation", "ramp": "60s" }
+          ]
+        },
+        {
+          "at": "3m30s",
+          "note": "checkout-api starts shedding, and the order queue backs up",
+          "faults": [
+            { "target": "checkout-api", "kind": "errors", "errorRate": 0.35, "ramp": "30s" },
+            { "target": "orders-topic", "kind": "queueLag", "lagMs": 45000, "ramp": "90s" }
+          ]
+        },
+        {
+          "at": "6m",
+          "note": "Stripe recovers; everything downstream unwinds",
+          "clear": true
+        },
+        { "at": "8m", "note": "Steady again" }
+      ]
+    },
+
+    {
+      "id": "recovery",
+      "description": "Starts bad and mends, so the repair-and-reopen path gets exercised.",
+      "steps": [
+        {
+          "at": "0s",
+          "note": "Already broken when we arrive",
+          "faults": [
+            { "target": "postgres-orders", "kind": "latency", "multiplier": 20 },
+            { "target": "checkout-api", "kind": "errors", "errorRate": 0.4 },
+            { "target": "orders-topic", "kind": "queueLag", "lagMs": 60000 }
+          ]
+        },
+        { "at": "2m", "note": "Someone finds the bad query and ships a fix", "clear": true },
+        {
+          "at": "2m",
+          "note": "Backlog still draining",
+          "faults": [
+            { "target": "orders-topic", "kind": "queueLag", "lagMs": 15000, "duration": "2m" }
+          ]
+        },
+        { "at": "5m", "note": "Fully recovered" }
+      ]
+    },
+
+    {
+      "id": "bad-deploy",
+      "description": "A release goes to a third of the fleet and only that third misbehaves.",
+      "steps": [
+        { "at": "0s", "clear": true },
+        {
+          "at": "20s",
+          "note": "Rolling deploy reaches one replica of checkout-api",
+          "faults": [
+            { "target": "checkout-api", "kind": "errors", "errorRate": 0.6, "coverage": 0.34, "because": "null reference in the new pricing code" },
+            { "target": "checkout-api", "kind": "latency", "multiplier": 3, "coverage": 0.34 }
+          ]
+        },
+        { "at": "3m", "note": "Rolled back", "clear": true }
+      ]
+    },
+
+    {
+      "id": "black-friday",
+      "description": "Nothing is broken. There is simply a great deal more of it.",
+      "steps": [
+        { "at": "0s", "clear": true },
+        {
+          "at": "15s",
+          "note": "Traffic climbs hard",
+          "faults": [
+            { "target": "flow:browse", "kind": "traffic", "multiplier": 8, "ramp": "90s" },
+            { "target": "flow:checkout", "kind": "traffic", "multiplier": 12, "ramp": "90s" },
+            { "target": "flow:search", "kind": "traffic", "multiplier": 6, "ramp": "90s" }
+          ]
+        },
+        {
+          "at": "3m",
+          "note": "The catalog cache starts evicting and the database feels it",
+          "faults": [
+            { "target": "redis-catalog", "kind": "saturation", "ramp": "60s" },
+            { "target": "postgres-catalog", "kind": "latency", "multiplier": 6, "ramp": "60s" }
+          ]
+        },
+        { "at": "8m", "note": "Peak passes", "clear": true }
+      ]
+    },
+
+    {
+      "id": "database-outage",
+      "description": "A database goes away completely. Connections are refused, not slow — a very different shape from degradation.",
+      "steps": [
+        { "at": "0s", "clear": true },
+        {
+          "at": "30s",
+          "note": "postgres-orders is gone",
+          "faults": [
+            { "target": "postgres-orders", "kind": "outage", "because": "failover" }
+          ]
+        },
+        { "at": "2m", "note": "Failover completes", "clear": true }
+      ]
+    }
+  ]
+}

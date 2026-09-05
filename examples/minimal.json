@@ -1,0 +1,40 @@
+{
+  "$schema": "../schema/traffic.schema.json",
+
+  "town": { "name": "hello-town" },
+
+  "exporter": { "endpoint": "http://localhost:4318" },
+
+  "services": [
+    {
+      "id": "api",
+      "kind": "api",
+      "latency": { "p50Ms": 12, "p99Ms": 80 },
+      "errorRate": 0.01,
+      "dependencies": [
+        { "target": "db", "operation": "SELECT users" }
+      ]
+    },
+    {
+      "id": "db",
+      "kind": "database",
+      "latency": { "p50Ms": 3, "p99Ms": 30 },
+      "database": { "system": "postgresql", "namespace": "app" }
+    }
+  ],
+
+  "flows": [
+    { "id": "requests", "entry": "api", "route": "GET /users", "rps": 5 }
+  ],
+
+  "scenarios": [
+    {
+      "id": "slow-db",
+      "description": "The database gets ten times slower.",
+      "steps": [
+        { "at": "0s", "clear": true },
+        { "at": "10s", "faults": [ { "target": "db", "kind": "latency", "multiplier": 10, "ramp": "20s" } ] }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>TraceTown.Traffic</RootNamespace>
+    <AssemblyName>trace-town-traffic</AssemblyName>
+    <UserSecretsId>trace-town-traffic</UserSecretsId>
+
+    <!-- The tool is published as a self-contained single file for the
+         container, so trimming warnings matter. -->
+    <IsAotCompatible>false</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="OpenTelemetry" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="TraceTown.Traffic.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="../../examples/**/*.json" CopyToOutputDirectory="PreserveNewest" LinkBase="examples" />
+  </ItemGroup>
+
+</Project>

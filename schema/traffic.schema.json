@@ -1,0 +1,311 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/FollyFactory/trace-town-traffic/main/schema/traffic.schema.json",
+  "title": "trace-town-traffic configuration",
+  "description": "A simulated distributed system: what it is made of, what calls what, how much traffic flows through it, and what goes wrong.",
+  "type": "object",
+  "additionalProperties": false,
+
+  "properties": {
+    "$schema": { "type": "string" },
+    "town": { "$ref": "#/$defs/town" },
+    "exporter": { "$ref": "#/$defs/exporter" },
+    "simulation": { "$ref": "#/$defs/simulation" },
+    "control": { "$ref": "#/$defs/control" },
+    "services": { "type": "array", "items": { "$ref": "#/$defs/service" } },
+    "flows": { "type": "array", "items": { "$ref": "#/$defs/flow" } },
+    "scenarios": { "type": "array", "items": { "$ref": "#/$defs/scenario" } }
+  },
+
+  "$defs": {
+    "duration": {
+      "type": "string",
+      "description": "A duration such as 500ms, 30s, 2m30s or 1h. A bare number is seconds.",
+      "pattern": "^(\\d+(\\.\\d+)?|(\\d+(\\.\\d+)?\\s*(ms|s|m|h|d)\\s*)+)$"
+    },
+
+    "ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+
+    "latency": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Time spent in this component alone, excluding anything it calls.",
+      "properties": {
+        "p50Ms": { "type": "number", "minimum": 0, "default": 10 },
+        "p99Ms": { "type": "number", "minimum": 0, "default": 50 },
+        "distribution": {
+          "enum": ["lognormal", "normal", "uniform", "constant"],
+          "default": "lognormal",
+          "description": "Lognormal matches real service latency: a hard floor and a long right tail."
+        },
+        "floorMs": { "type": "number", "minimum": 0, "default": 0 }
+      }
+    },
+
+    "town": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "default": "trace-town" },
+        "environment": { "type": "string", "default": "production" },
+        "resource": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Resource attributes merged onto every service."
+        }
+      }
+    },
+
+    "exporter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": { "type": "string", "format": "uri", "default": "http://localhost:4318" },
+        "protocol": { "enum": ["httpProtobuf", "grpc"], "default": "httpProtobuf" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "traces": { "type": "boolean", "default": true },
+        "metrics": { "type": "boolean", "default": true },
+        "logs": { "type": "boolean", "default": true },
+        "metricIntervalMs": { "type": "integer", "minimum": 100, "default": 10000 },
+        "timeoutMs": { "type": "integer", "minimum": 1, "default": 10000 }
+      }
+    },
+
+    "simulation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tickMs": { "type": "integer", "minimum": 1, "default": 250 },
+        "traceSampleRatio": { "$ref": "#/$defs/ratio", "default": 0.1 },
+        "errorTraceSampleRatio": { "$ref": "#/$defs/ratio", "default": 1 },
+        "seed": { "type": "integer" },
+        "rateMultiplier": { "type": "number", "minimum": 0, "default": 1 },
+        "maxDepth": { "type": "integer", "minimum": 0, "default": 12 },
+        "scenario": { "type": "string" },
+        "duration": { "$ref": "#/$defs/duration" }
+      }
+    },
+
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "host": { "type": "string", "default": "127.0.0.1" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 8080 },
+        "token": { "type": "string", "description": "Required as `Authorization: Bearer <token>` when set." }
+      }
+    },
+
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "description": "service.name. Defaults to id." },
+        "kind": {
+          "enum": ["gateway", "api", "worker", "database", "cache", "queue", "cron", "external"],
+          "description": "Decides which signals the component emits, and whether calls to it produce a server span at all."
+        },
+        "group": { "type": "string", "description": "service.namespace — team, bounded context, neighbourhood." },
+        "version": { "type": "string", "default": "1.0.0" },
+        "instances": { "type": "integer", "minimum": 1, "default": 1 },
+        "latency": { "$ref": "#/$defs/latency" },
+        "errorRate": { "$ref": "#/$defs/ratio" },
+        "resource": { "type": "object", "additionalProperties": { "type": "string" } },
+        "dependencies": { "type": "array", "items": { "$ref": "#/$defs/dependency" } },
+        "consumes": { "type": "array", "items": { "$ref": "#/$defs/consumer" } },
+        "database": { "$ref": "#/$defs/database" },
+        "cache": { "$ref": "#/$defs/cache" },
+        "queue": { "$ref": "#/$defs/queue" },
+        "cron": { "$ref": "#/$defs/cron" }
+      }
+    },
+
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target"],
+      "properties": {
+        "target": { "type": "string" },
+        "operation": {
+          "type": "string",
+          "description": "`POST /api/checkout` for HTTP, `SELECT orders` for a database, `GET session` for a cache, a destination name for a queue."
+        },
+        "probability": { "$ref": "#/$defs/ratio", "default": 1 },
+        "calls": { "type": "integer", "minimum": 0, "default": 1 },
+        "callsMax": { "type": "integer", "minimum": 0 },
+        "async": { "type": "boolean", "default": false },
+        "propagates": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether a failure downstream fails the caller. False models a fallback or a circuit breaker."
+        }
+      }
+    },
+
+    "consumer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["queue"],
+      "properties": {
+        "queue": { "type": "string" },
+        "destination": { "type": "string" },
+        "lagMs": { "type": "number", "minimum": 0, "default": 100 },
+        "batch": { "type": "integer", "minimum": 1, "default": 1 },
+        "errorRate": { "$ref": "#/$defs/ratio" }
+      }
+    },
+
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "system": { "type": "string", "default": "postgresql", "description": "db.system.name" },
+        "namespace": { "type": "string" },
+        "maxConnections": { "type": "integer", "minimum": 1, "default": 100 },
+        "slowQueryMs": { "type": "number", "minimum": 0, "default": 500 }
+      }
+    },
+
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "system": { "type": "string", "default": "redis" },
+        "hitRate": { "$ref": "#/$defs/ratio", "default": 0.95 },
+        "memoryBytes": { "type": "integer", "minimum": 0 },
+        "maxMemoryBytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+
+    "queue": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "system": { "type": "string", "default": "kafka", "description": "messaging.system" },
+        "destination": { "type": "string" },
+        "partitions": { "type": "integer", "minimum": 1, "default": 3 }
+      }
+    },
+
+    "cron": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "every": { "$ref": "#/$defs/duration", "default": "5m" },
+        "jitter": { "$ref": "#/$defs/duration" },
+        "job": { "type": "string" }
+      }
+    },
+
+    "flow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "entry"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "entry": { "type": "string", "description": "The service requests arrive at." },
+        "route": { "type": "string", "description": "e.g. `POST /api/checkout`. Becomes the root span name." },
+        "rps": { "type": "number", "minimum": 0, "default": 1 },
+        "profile": { "$ref": "#/$defs/profile" },
+        "clientErrorRate": {
+          "$ref": "#/$defs/ratio",
+          "description": "4xx rejections at the edge. Not counted as failures — a bad request is not an incident."
+        },
+        "always": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Services this flow always reaches, ignoring dependency probabilities. Globs allowed."
+        },
+        "except": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Services this flow never calls, at any depth. Globs allowed."
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How far down the graph this flow reaches. 0 is the entry point alone."
+        }
+      }
+    },
+
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": ["constant", "diurnal", "sine", "burst", "ramp", "randomWalk"],
+          "default": "constant"
+        },
+        "amplitude": { "$ref": "#/$defs/ratio", "default": 0.3 },
+        "period": { "$ref": "#/$defs/duration", "default": "10m" },
+        "duty": { "$ref": "#/$defs/ratio", "default": 0.1 },
+        "peak": { "type": "number", "minimum": 0, "default": 3 },
+        "jitter": { "type": "number", "minimum": 0, "default": 0.05 }
+      }
+    },
+
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" },
+        "loop": { "type": "boolean", "default": false },
+        "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } }
+      }
+    },
+
+    "step": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "at": { "$ref": "#/$defs/duration", "default": "0s" },
+        "note": { "type": "string", "description": "Logged when the step fires, so a run narrates itself." },
+        "clear": { "type": "boolean", "description": "Remove every fault this scenario has applied." },
+        "faults": { "type": "array", "items": { "$ref": "#/$defs/fault" } }
+      }
+    },
+
+    "fault": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "kind"],
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "A service id, `flow:<id>` for a flow, or a `*` glob against either."
+        },
+        "kind": {
+          "enum": ["latency", "errors", "outage", "traffic", "queueLag", "saturation"]
+        },
+        "multiplier": { "type": "number", "minimum": 0 },
+        "p50Ms": { "type": "number", "minimum": 0 },
+        "p99Ms": { "type": "number", "minimum": 0 },
+        "errorRate": { "$ref": "#/$defs/ratio" },
+        "lagMs": { "type": "number", "minimum": 0 },
+        "coverage": {
+          "$ref": "#/$defs/ratio",
+          "default": 1,
+          "description": "Fraction of replicas affected. Models a bad deploy reaching part of the fleet."
+        },
+        "ramp": { "$ref": "#/$defs/duration", "description": "Ease the fault in over this long." },
+        "duration": { "$ref": "#/$defs/duration", "description": "Self-clear after this long." },
+        "because": { "type": "string", "description": "Free-text reason, logged when the fault fires." }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "traffic" } }, "required": ["kind"] },
+          "then": {
+            "properties": { "target": { "pattern": "^flow:" } },
+            "description": "A traffic fault must target a flow."
+          }
+        }
+      ]
+    }
+  }
+}

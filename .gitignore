@@ -1,0 +1,19 @@
+# Build output
+bin/
+obj/
+artifacts/
+*.user
+*.suo
+
+# Local overrides — keep your endpoint and API keys out of the repo
+traffic.local.json
+*.local.json
+.env
+
+# Tooling that is nobody else's business
+.claude/
+.idea/
+.vs/
+.vscode/
+*.swp
+.DS_Store

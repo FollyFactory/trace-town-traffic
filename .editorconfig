@@ -1,0 +1,41 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.{cs,csx}]
+indent_size = 4
+
+# Namespaces are file-scoped, usings live outside them and are sorted.
+csharp_style_namespace_declarations = file_scoped:error
+dotnet_sort_system_directives_first = true
+csharp_using_directive_placement = outside_namespace:error
+
+# Prefer expression-bodied members where they stay readable.
+csharp_style_expression_bodied_methods = when_on_single_line:suggestion
+csharp_style_expression_bodied_properties = true:suggestion
+
+# `var` only when the type is on the right-hand side.
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_var_elsewhere = false:suggestion
+
+# Modern language features.
+csharp_style_prefer_primary_constructors = true:suggestion
+csharp_prefer_braces = true:suggestion
+dotnet_style_prefer_collection_expression = true:suggestion
+
+[*.{json,yml,yaml,md}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+# Test names are sentences, and underscores are how you write a sentence in an
+# identifier. CA1707 is about public API surface, which a test project has none of.
+[tests/**/*.cs]
+dotnet_diagnostic.CA1707.severity = none
