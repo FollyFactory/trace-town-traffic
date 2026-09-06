@@ -1,0 +1,41 @@
+# Traces, in Jaeger. The smallest setup here.
+#
+#   docker compose -f deploy/jaeger.yml --profile generator up -d
+#
+# Jaeger UI  http://localhost:16686
+name: trace-town-jaeger
+
+services:
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.140.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./config/collector-jaeger.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      - jaeger
+    restart: unless-stopped
+
+  jaeger:
+    image: jaegertracing/jaeger:2.11.0
+    ports:
+      - "16686:16686"
+    restart: unless-stopped
+
+  # Off unless you ask for it: --profile generator
+  generator:
+    profiles: ["generator"]
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["examples/ecommerce.json", "--endpoint", "http://collector:4318"]
+    environment:
+      TRAFFIC_CONTROL_HOST: 0.0.0.0
+    ports:
+      - "8080:8080"
+    depends_on:
+      collector:
+        condition: service_started
+    restart: unless-stopped

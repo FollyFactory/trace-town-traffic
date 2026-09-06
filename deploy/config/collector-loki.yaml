@@ -1,0 +1,31 @@
+# Loki 3.x ingests OTLP logs natively at /otlp. Traces and metrics are discarded.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 2s
+    send_batch_size: 2048
+
+exporters:
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+  nop: {}
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/loki]
+    traces:
+      receivers: [otlp]
+      exporters: [nop]
+    metrics:
+      receivers: [otlp]
+      exporters: [nop]

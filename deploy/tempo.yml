@@ -1,36 +1,32 @@
-# Metrics, in Prometheus, with Grafana in front of it.
+# Traces, in Grafana Tempo, with Grafana in front of it.
 #
-#   docker compose -f deploy/prometheus.yml --profile generator up -d
+#   docker compose -f deploy/tempo.yml --profile generator up -d
 #
-# Grafana     http://localhost:3000   (no login)
-# Prometheus  http://localhost:9090
-name: trace-town-prometheus
+# Grafana  http://localhost:3000   (no login)
+name: trace-town-tempo
 
 services:
   collector:
     image: otel/opentelemetry-collector-contrib:0.140.0
     command: ["--config=/etc/otel/config.yaml"]
     volumes:
-      - ./config/collector-prometheus.yaml:/etc/otel/config.yaml:ro
+      - ./config/collector-tempo.yaml:/etc/otel/config.yaml:ro
     ports:
       - "4317:4317"
       - "4318:4318"
     depends_on:
-      - prometheus
+      - tempo
     restart: unless-stopped
 
-  prometheus:
-    image: prom/prometheus:v3.7.3
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      # Metrics are pushed in over OTLP rather than scraped.
-      - --web.enable-otlp-receiver
+  tempo:
+    image: grafana/tempo:2.9.1
+    command: ["-config.file=/etc/tempo/config.yaml"]
+    user: root
     volumes:
-      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
+      - ./config/tempo.yaml:/etc/tempo/config.yaml:ro
+      - tempo-data:/var/tempo
     ports:
-      - "9090:9090"
+      - "3200:3200"
     restart: unless-stopped
 
   grafana:
@@ -40,11 +36,11 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
     volumes:
-      - ./config/grafana/prometheus.yaml:/etc/grafana/provisioning/datasources/prometheus.yaml:ro
+      - ./config/grafana/tempo.yaml:/etc/grafana/provisioning/datasources/tempo.yaml:ro
     ports:
       - "3000:3000"
     depends_on:
-      - prometheus
+      - tempo
     restart: unless-stopped
 
   # Off unless you ask for it: --profile generator
@@ -64,4 +60,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  prometheus-data:
+  tempo-data:

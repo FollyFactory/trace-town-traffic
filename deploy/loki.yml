@@ -1,36 +1,35 @@
-# Metrics, in Prometheus, with Grafana in front of it.
+# Logs, in Loki, with Grafana in front of it.
 #
-#   docker compose -f deploy/prometheus.yml --profile generator up -d
+#   docker compose -f deploy/loki.yml --profile generator up -d
 #
-# Grafana     http://localhost:3000   (no login)
-# Prometheus  http://localhost:9090
-name: trace-town-prometheus
+# Grafana  http://localhost:3000   (no login)
+#
+# Logs are the quietest signal the generator produces: only errors and sampled
+# requests are logged, so expect far fewer lines than traces. Run it with
+# --sample 1.0 if you want more.
+name: trace-town-loki
 
 services:
   collector:
     image: otel/opentelemetry-collector-contrib:0.140.0
     command: ["--config=/etc/otel/config.yaml"]
     volumes:
-      - ./config/collector-prometheus.yaml:/etc/otel/config.yaml:ro
+      - ./config/collector-loki.yaml:/etc/otel/config.yaml:ro
     ports:
       - "4317:4317"
       - "4318:4318"
     depends_on:
-      - prometheus
+      - loki
     restart: unless-stopped
 
-  prometheus:
-    image: prom/prometheus:v3.7.3
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      # Metrics are pushed in over OTLP rather than scraped.
-      - --web.enable-otlp-receiver
+  loki:
+    image: grafana/loki:3.5.7
+    command: ["-config.file=/etc/loki/config.yaml"]
     volumes:
-      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
+      - ./config/loki.yaml:/etc/loki/config.yaml:ro
+      - loki-data:/loki
     ports:
-      - "9090:9090"
+      - "3100:3100"
     restart: unless-stopped
 
   grafana:
@@ -40,11 +39,11 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
       GF_AUTH_DISABLE_LOGIN_FORM: "true"
     volumes:
-      - ./config/grafana/prometheus.yaml:/etc/grafana/provisioning/datasources/prometheus.yaml:ro
+      - ./config/grafana/loki.yaml:/etc/grafana/provisioning/datasources/loki.yaml:ro
     ports:
       - "3000:3000"
     depends_on:
-      - prometheus
+      - loki
     restart: unless-stopped
 
   # Off unless you ask for it: --profile generator
@@ -64,4 +63,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  prometheus-data:
+  loki-data:

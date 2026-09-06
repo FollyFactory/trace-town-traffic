@@ -1,54 +1,37 @@
-# SigNoz, as an overlay on the main stack. Export COMPOSE_FILE once so that
-# every later command picks up both files:
+# All three signals, in SigNoz.
 #
-#   export COMPOSE_FILE=deploy/docker-compose.yml:deploy/docker-compose.signoz.yml
-#   docker compose up -d
-#   docker compose --profile generator up -d
+#   docker compose -f deploy/signoz.yml --profile generator up -d
 #
-# Passing only the base -f file on a later command recreates the collector
-# without the SigNoz exporter below. Nothing errors, every container stays
-# healthy, and telemetry silently stops reaching SigNoz.
-#
-# SigNoz UI            http://localhost:3301
-# Everything else      unchanged — Grafana, Jaeger and Prometheus keep working
+# SigNoz  http://localhost:3301
 #
 # ┌───────────────────────────────────────────────────────────────────────────┐
 # │ FIRST RUN: create an account at http://localhost:3301 before expecting    │
-# │ any data. Until setup is complete, SigNoz's opamp server pushes a `nop`   │
-# │ pipeline to its ingester, so port 4317 never opens and the collector logs │
-# │ "connection refused" while everything looks healthy. This is a one-time   │
-# │ step and it is not obvious from any of the symptoms.                      │
+# │ data. Until setup is complete, SigNoz pushes a 'nop' pipeline to its own  │
+# │ ingester, so port 4317 never opens and the collector logs "connection     │
+# │ refused" while every container reports healthy.                           │
 # └───────────────────────────────────────────────────────────────────────────┘
 #
-# The generator still exports to one endpoint. This overlay only adds a second
-# destination behind the collector, so nothing about how you run the generator
-# changes.
-#
-# ─────────────────────────────────────────────────────────────────────────────
-# This is a snapshot of the deployment Foundry generates, pinned and trimmed for
-# local use. SigNoz deprecated their own Compose manifests in favour of Foundry
-# (https://signoz.io/docs/install/docker/), which is what you should use to run
-# SigNoz for real. What is here is a testing stack, not a supported deployment.
-#
-# The service names are load-bearing: the vendored configs in deploy/signoz/
-# address each other by hostname, so renaming a service breaks it.
+# The files under config/signoz/ are a pinned snapshot of what Foundry
+# generates. SigNoz deprecated their own Compose manifests in favour of it
+# (https://signoz.io/docs/install/docker/), which is what to use for real. The
+# service names are load-bearing: the configs address each other by hostname.
+name: trace-town-signoz
 
 services:
-  # Our collector gains SigNoz as an additional exporter. Both config files are
-  # passed and the collector merges them.
   collector:
-    command:
-      - --config=/etc/otel/config.yaml
-      - --config=/etc/otel/signoz.yaml
+    image: otel/opentelemetry-collector-contrib:0.140.0
+    command: ["--config=/etc/otel/config.yaml"]
     volumes:
-      - ./otel-collector.yaml:/etc/otel/config.yaml:ro
-      - ./otel-collector.signoz.yaml:/etc/otel/signoz.yaml:ro
+      - ./config/collector-signoz.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
     depends_on:
       signoz-ingester:
         condition: service_started
+    restart: unless-stopped
 
-  # SigNoz's own collector, which writes into ClickHouse in SigNoz's schema.
-  # Deliberately not published on 4317/4318 — our collector already owns those
+  # SigNoz's own collector. Not published on 4317/4318 — ours already owns those
   # on the host, and one ingest endpoint is less to explain.
   signoz-ingester:
     image: signoz/signoz-otel-collector:v0.144.9
@@ -64,8 +47,8 @@ services:
       SIGNOZ_OTEL_COLLECTOR_TIMEOUT: 10m
       LOW_CARDINAL_EXCEPTION_GROUPING: "false"
     volumes:
-      - ./signoz/ingester/ingester.yaml:/etc/otel-collector-config.yaml:ro
-      - ./signoz/ingester/opamp.yaml:/etc/opamp-config.yaml:ro
+      - ./config/signoz/ingester/ingester.yaml:/etc/otel-collector-config.yaml:ro
+      - ./config/signoz/ingester/opamp.yaml:/etc/opamp-config.yaml:ro
     depends_on:
       signoz-telemetrystore-migrator:
         condition: service_completed_successfully
@@ -80,8 +63,7 @@ services:
       SIGNOZ_TELEMETRYSTORE_PROVIDER: clickhouse
       SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN: tcp://signoz-telemetrystore-clickhouse-0-0:9000
     ports:
-      # SigNoz serves on 8080, which the generator's control API already uses
-      # on the host. 3301 is SigNoz's own historical port.
+      # SigNoz serves on 8080, which the generator's control API already uses.
       - "3301:8080"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/v1/health"]
@@ -125,7 +107,7 @@ services:
       start_period: 40s
     volumes:
       - signoz-keeper-data:/var/lib/clickhouse-keeper
-      - ./signoz/telemetrykeeper/keeper.yaml:/etc/clickhouse-keeper/keeper.yaml:ro
+      - ./config/signoz/telemetrykeeper/keeper.yaml:/etc/clickhouse-keeper/keeper.yaml:ro
     restart: unless-stopped
 
   signoz-telemetrystore-clickhouse-0-0:
@@ -143,8 +125,8 @@ services:
     volumes:
       - signoz-clickhouse-data:/var/lib/clickhouse
       - signoz-clickhouse-user-scripts:/var/lib/clickhouse/user_scripts:ro
-      - ./signoz/telemetrystore/config.yaml:/etc/clickhouse-server/config-0-0.yaml:ro
-      - ./signoz/telemetrystore/functions.yaml:/etc/clickhouse-server/functions.yaml:ro
+      - ./config/signoz/telemetrystore/config.yaml:/etc/clickhouse-server/config-0-0.yaml:ro
+      - ./config/signoz/telemetrystore/functions.yaml:/etc/clickhouse-server/functions.yaml:ro
     depends_on:
       signoz-telemetrykeeper-clickhousekeeper-0:
         condition: service_healthy
@@ -152,8 +134,8 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  # ClickHouse calls out to a helper binary for histogram quantiles, and SigNoz
-  # fetches it at start-up rather than baking it into the image.
+  # ClickHouse calls out to a helper binary for histogram quantiles, which
+  # SigNoz fetches at start-up rather than baking into the image.
   signoz-clickhouse-user-scripts:
     image: clickhouse/clickhouse-server:25.12.5
     container_name: signoz-clickhouse-user-scripts
@@ -190,6 +172,22 @@ services:
       signoz-telemetrystore-clickhouse-0-0:
         condition: service_healthy
     restart: on-failure
+
+  # Off unless you ask for it: --profile generator
+  generator:
+    profiles: ["generator"]
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["examples/ecommerce.json", "--endpoint", "http://collector:4318"]
+    environment:
+      TRAFFIC_CONTROL_HOST: 0.0.0.0
+    ports:
+      - "8080:8080"
+    depends_on:
+      collector:
+        condition: service_started
+    restart: unless-stopped
 
 volumes:
   signoz-postgres-data:

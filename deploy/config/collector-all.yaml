@@ -1,7 +1,5 @@
-# Collector config for the bundled stack. The generator speaks plain OTLP, so
-# nothing here is required to use the tool — swap this out for whatever your
-# own pipeline looks like.
-
+# Every backend at once, fed from one collector. Useful for comparing how they
+# each render the same telemetry; heavier than any single setup.
 receivers:
   otlp:
     protocols:
@@ -15,26 +13,12 @@ processors:
     timeout: 2s
     send_batch_size: 2048
 
-  memory_limiter:
-    check_interval: 1s
-    limit_percentage: 80
-    spike_limit_percentage: 20
-
-  # Promote the simulated service identity onto every metric as a label, so a
-  # Prometheus query can group by service without going through resource
-  # attributes. Real deployments often do exactly this.
-  resource:
-    attributes:
-      - key: collector.name
-        value: trace-town-traffic
-        action: upsert
-
 # Derived signals, computed from the spans as they pass through. This is what a
 # real OpenTelemetry deployment looks like, and what most tools expect to read:
 # RED metrics and a service graph that come from the traces themselves rather
 # than from each service being separately instrumented to report them.
 connectors:
-  # trace.* spans in, calls/duration metrics out, tagged by service.
+  # Spans in, calls/duration metrics out, tagged by service.
   spanmetrics:
     histogram:
       explicit:
@@ -62,39 +46,22 @@ exporters:
     endpoint: jaeger:4317
     tls:
       insecure: true
-
   otlphttp/prometheus:
     endpoint: http://prometheus:9090/api/v1/otlp
-
   otlphttp/loki:
     endpoint: http://loki:3100/otlp
 
-  # Uncomment to watch telemetry go past on the collector's own stdout.
-  # debug:
-  #   verbosity: detailed
-
 service:
-  telemetry:
-    logs:
-      level: info
-
   pipelines:
-    # Spans fan out three ways: to Jaeger as traces, and into the two connectors
-    # that turn them into metrics.
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, resource, batch]
-      exporters: [otlp/jaeger, spanmetrics, servicegraph]
-
-    # Both the metrics the services report themselves and the ones derived from
-    # their spans end up in the same store, which is exactly the situation a
-    # reader has to cope with in the wild.
+      processors: [batch]
+      exporters: [otlp/jaeger]
     metrics:
-      receivers: [otlp, spanmetrics, servicegraph]
-      processors: [memory_limiter, resource, batch]
+      receivers: [otlp]
+      processors: [batch]
       exporters: [otlphttp/prometheus]
-
     logs:
       receivers: [otlp]
-      processors: [memory_limiter, resource, batch]
+      processors: [batch]
       exporters: [otlphttp/loki]

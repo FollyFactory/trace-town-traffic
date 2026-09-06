@@ -1,0 +1,66 @@
+# Prometheus takes metrics over OTLP, which is why it runs with
+# --web.enable-otlp-receiver.
+#
+# Traces are not discarded here: they feed the spanmetrics and servicegraph
+# connectors, so a metrics-only stack still gets RED metrics and a service graph
+# — including the databases and brokers, which never emit a span of their own
+# and so can only ever appear as the far end of somebody's call.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    timeout: 2s
+    send_batch_size: 2048
+
+# Derived signals, computed from the spans as they pass through. This is what a
+# real OpenTelemetry deployment looks like, and what most tools expect to read:
+# RED metrics and a service graph that come from the traces themselves rather
+# than from each service being separately instrumented to report them.
+connectors:
+  # Spans in, calls/duration metrics out, tagged by service.
+  spanmetrics:
+    histogram:
+      explicit:
+        buckets: [2ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s, 10s]
+    dimensions:
+      - name: http.request.method
+      - name: http.response.status_code
+      - name: db.system.name
+      - name: messaging.system
+    exemplars:
+      enabled: false
+    metrics_flush_interval: 15s
+
+  # Client/server span pairs in, edges out — including the ones that are only
+  # ever the far end of somebody's call, which is every database and broker.
+  servicegraph:
+    latency_histogram_buckets: [2ms, 10ms, 50ms, 100ms, 250ms, 1s, 5s]
+    dimensions: [db.system.name, messaging.system]
+    store:
+      ttl: 10s
+      max_items: 10000
+
+exporters:
+  otlphttp/prometheus:
+    endpoint: http://prometheus:9090/api/v1/otlp
+  nop: {}
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp, spanmetrics, servicegraph]
+      processors: [batch]
+      exporters: [otlphttp/prometheus]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [spanmetrics, servicegraph]
+    logs:
+      receivers: [otlp]
+      exporters: [nop]
