@@ -1,5 +1,26 @@
 # Scenarios
 
+A timed sequence of things going wrong. This is the reason the tool exists.
+
+```bash
+trace-town-traffic examples/ecommerce.json --scenario cascade
+curl -X POST localhost:8080/api/scenarios/cascade    # or switch it live
+```
+
+| Fault | Effect |
+|---|---|
+| `latency` | Slower. `multiplier`, or absolute `p50Ms`/`p99Ms` |
+| `errors` | Fails some of the time. `errorRate` |
+| `outage` | Refuses connections — fails *fast*, unlike a timeout |
+| `traffic` | More or less load. Targets a flow: `"flow:checkout"` |
+| `queueLag` | Messages wait longer. Backlog grows |
+| `saturation` | Exhausts its own resources — visible in infra metrics first |
+
+Add `ramp` to ease one in, `coverage` to hit only some replicas, `duration` to
+self-clear. `target` takes globs.
+
+---
+
 A scenario is a timed sequence of things going wrong. Generating steady traffic
 is easy and not very interesting; being able to reproduce a specific incident, on
 demand, in seconds, is the reason this tool exists.

@@ -1,6 +1,21 @@
 # How it works
 
-One process, one config file, real OpenTelemetry SDKs. The design has one
+One process, one config file, real OpenTelemetry SDKs.
+
+- **Simulation and emission are separate.** `RequestSimulator` decides what
+  happened and builds a span tree; `TelemetryEmitter` turns that into OTLP.
+- **A span tree is built whole and backdated** to have just finished, which is
+  what lets an async consumer span sit correctly after its producer.
+- **One SDK pipeline per service**, so every resource and `service.name` is real.
+- **Metrics for every request, spans only for sampled ones.**
+- **Little's law** derives pool usage, concurrency and queue depth, so a slow
+  dependency exhausts its caller's pool without the two being wired together.
+
+Skip to [what it does not model](#what-it-deliberately-does-not-model) if that is
+what you came for.
+
+---
+ The design has one
 organising idea: **simulation and emission are separate**. The simulator decides
 what happened; the emitter turns that into OTLP. Neither knows much about the
 other, which is why both can be tested without a backend.

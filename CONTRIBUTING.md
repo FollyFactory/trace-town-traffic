@@ -26,8 +26,8 @@ dotnet run --project src/TraceTown.Traffic -- examples/ecommerce.json --dry-run
 # Check a config without running it
 dotnet run --project src/TraceTown.Traffic -- examples/ecommerce.json --validate
 
-# The full local stack
-docker compose -f deploy/docker-compose.yml up -d
+# A backend to look at the results in — one command each, see docs/setup
+docker compose -f deploy/jaeger.yml --profile generator up -d
 ```
 
 ## Conventions
@@ -66,6 +66,14 @@ Anything touching the config file also needs
 [`schema/traffic.schema.json`](schema/traffic.schema.json) and
 [`docs/configuration.md`](docs/configuration.md) updating. They are part of the
 change, not a follow-up.
+
+**A backend** gets its own `deploy/<name>.yml` and `deploy/config/collector-<name>.yaml`,
+plus a short page in [`docs/setup/`](docs/setup/README.md) linked from the table
+in that folder's README and in the main one. Keep the file self-contained: one
+`-f` flag, one command, no overlays. Signals the backend does not take go to the
+`nop` exporter rather than erroring back at the generator — except traces where
+a metrics store is present, which feed the `spanmetrics` and `servicegraph`
+connectors instead.
 
 ## Tests
 

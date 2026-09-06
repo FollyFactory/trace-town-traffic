@@ -1,5 +1,23 @@
 # Control API
 
+Change what the running generator is doing, without a restart.
+
+```bash
+curl localhost:8080/api/status                    # what is happening
+curl -X POST localhost:8080/api/scenarios/cascade # switch scenario
+curl localhost:8080/api/faults                    # what is currently broken
+
+curl -X POST localhost:8080/api/faults -H 'Content-Type: application/json' \
+  -d '{"target":"postgres-*","kind":"latency","multiplier":20,"ramp":"30s"}'
+
+curl -X POST localhost:8080/api/flows/checkout/rate \
+  -H 'Content-Type: application/json' -d '{"rps":200}'
+```
+
+Bound to `127.0.0.1` with no auth unless you set `control.token`.
+
+---
+
 The config file is the source of truth, but you rarely want to restart to change
 one thing. A small HTTP API lets you switch scenario, inject a fault or change a
 rate while the generator is running — for demos, for exploratory work, and for

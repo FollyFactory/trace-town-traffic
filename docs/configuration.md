@@ -1,6 +1,28 @@
-# Configuration reference
+# Configuration
 
-One JSON file describes the whole simulated system. Comments and trailing commas
+One JSON file describes the whole simulated system. The short version:
+
+```json
+{
+  "exporter": { "endpoint": "http://localhost:4318" },
+  "services": [
+    { "id": "api", "kind": "api", "latency": { "p50Ms": 12, "p99Ms": 80 },
+      "dependencies": [ { "target": "db", "operation": "SELECT users" } ] },
+    { "id": "db", "kind": "database", "database": { "system": "postgresql" } }
+  ],
+  "flows": [ { "id": "main", "entry": "api", "route": "GET /users", "rps": 5 } ]
+}
+```
+
+```bash
+trace-town-traffic my-town.json --validate   # check it
+trace-town-traffic my-town.json --dry-run    # see what it produces
+```
+
+Everything below is detail.
+
+---
+ Comments and trailing commas
 are allowed. A [JSON schema](../schema/traffic.schema.json) is provided for
 editor completion — reference it from the top of your file:
 
