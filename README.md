@@ -28,6 +28,7 @@ anything that speaks OTLP will do.
 | **[Loki](docs/setup/loki.md)** | logs | With Grafana |
 | **[Tempo](docs/setup/tempo.md)** | traces | With Grafana |
 | **[SigNoz](docs/setup/signoz.md)** | all three | What Trace Town reads |
+| **[Application Insights](docs/setup/appinsights.md)** | all three | Azure. Costs money |
 | **[Everything](docs/setup/all.md)** | all three | For comparing them |
 
 One command each — see **[docs/setup](docs/setup/README.md)**. Already have a

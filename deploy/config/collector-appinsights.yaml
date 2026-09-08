@@ -1,0 +1,105 @@
+# Application Insights takes all three signals, so nothing is discarded here —
+# this is the only setup in the repo where every pipeline has a real exporter.
+#
+# The backend is Azure rather than a container, so the only thing this file
+# needs from you is a connection string. It comes from the environment so that
+# it is never written down in the repo: see deploy/.env, which is gitignored.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Larger and slower than the local setups. Every batch is a billed HTTPS round
+  # trip to Azure rather than a hop to the container next door, and the
+  # exporter batches again on its own behalf underneath this.
+  batch:
+    timeout: 5s
+    send_batch_size: 2048
+
+  # Two corrections, both of which are the difference between a service map
+  # that joins up and one that does not. Neither is optional, and neither is
+  # guesswork — the envelopes the exporter builds were captured and read.
+  transform/azure:
+    error_mode: ignore
+    trace_statements:
+      # 1. Application Insights' `cloud_RoleName` — the identity everything
+      #    downstream groups by — is built by the exporter as
+      #    `service.namespace + "." + service.name`, falling back to the bare
+      #    name only when there is no namespace. The generator sets
+      #    `service.namespace` from a service's `group`, so left alone every
+      #    role name reads `orders.checkout-api`.
+      #
+      #    That on its own would only be ugly. What makes it wrong is the other
+      #    half: a dependency's `target` is the plain hostname, `checkout-api`,
+      #    with no group in it. So every edge would point at a name no service
+      #    has, and the service map would be a set of buildings with roads to
+      #    nowhere. Dropping the namespace makes the two ends agree.
+      - context: resource
+        statements:
+          - delete_key(resource.attributes, "service.namespace")
+      # 2. `target` is empty on every database, cache and queue dependency —
+      #    which is most of the interesting ones. It is an upstream bug rather
+      #    than anything missing here: fillRemoteDependencyDataDatabase and
+      #    fillRemoteDependencyDataMessaging both read `client.address` and
+      #    fall back to `network.peer.address`, when what a client span carries
+      #    is `server.address`. HTTP is unaffected because it takes its target
+      #    from `url.full` instead, which is why the http edges look fine and
+      #    hide the problem.
+      #
+      #    Copying the address onto the attribute the fallback does read gets
+      #    `postgres-orders` and `redis-sessions` into `target`. The port is
+      #    deliberately not copied: the exporter appends `client.port`, not the
+      #    peer port, so a bare address comes out formatted exactly like the
+      #    HTTP targets beside it.
+      - context: span
+        statements:
+          - set(span.attributes["network.peer.address"], span.attributes["server.address"])
+            where span.attributes["server.address"] != nil
+              and span.attributes["network.peer.address"] == nil
+    # Role names are built the same way for metrics and logs, so the namespace
+    # has to go from those too or they will not join to the traces.
+    metric_statements:
+      - context: resource
+        statements:
+          - delete_key(resource.attributes, "service.namespace")
+    log_statements:
+      - context: resource
+        statements:
+          - delete_key(resource.attributes, "service.namespace")
+
+exporters:
+  # `azuremonitor`, not `azure_monitor`. Upstream renamed this component to
+  # `azure_monitor` after 0.140.0, so the README on main and the collector this
+  # file is pinned to disagree, and getting it wrong is not a warning — the
+  # collector refuses the whole config and the container exits immediately.
+  # Whoever bumps the image next will have to change this line.
+  azuremonitor:
+    connection_string: ${env:APPLICATIONINSIGHTS_CONNECTION_STRING}
+    maxbatchsize: 1024
+    maxbatchinterval: 10s
+
+service:
+  telemetry:
+    logs:
+      # Ingestion failures — a malformed connection string, a daily cap hit —
+      # are reported here and nowhere else. `docker compose -f
+      # deploy/appinsights.yml logs collector` is the first thing to read when
+      # the portal stays empty.
+      level: info
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [transform/azure, batch]
+      exporters: [azuremonitor]
+    metrics:
+      receivers: [otlp]
+      processors: [transform/azure, batch]
+      exporters: [azuremonitor]
+    logs:
+      receivers: [otlp]
+      processors: [transform/azure, batch]
+      exporters: [azuremonitor]

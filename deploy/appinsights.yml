@@ -1,0 +1,59 @@
+# Traces, metrics and logs into Azure Application Insights.
+#
+#   echo 'APPLICATIONINSIGHTS_CONNECTION_STRING=InstrumentationKey=...' > deploy/.env
+#   docker compose -f deploy/appinsights.yml --profile generator up -d
+#
+# Look at it in the Azure portal. There is no local UI, because there is no
+# local backend — this is the only setup here whose storage is somebody's
+# cloud, which has two consequences worth knowing before you start it.
+#
+# It costs money. Ingestion is billed per GB, and the generator at its
+# configured rate is a genuinely busy system. `--rate 0.05` below is why this
+# file does not run flat out, and docs/setup/appinsights.md explains what to
+# expect and how to put a hard cap under it.
+#
+# And it is slow to appear. Azure's ingestion latency is a minute or two, not
+# the second or so every other setup here takes. An empty portal is not
+# evidence of anything until five minutes have passed.
+#
+# Control API  http://localhost:8080/api/status
+name: trace-town-appinsights
+
+services:
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.140.0
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./config/collector-appinsights.yaml:/etc/otel/config.yaml:ro
+    environment:
+      # Read by the collector config, not by the collector itself. The default
+      # keeps `docker compose config` quiet when the variable is unset, which
+      # is how CI validates this file without an Azure account.
+      APPLICATIONINSIGHTS_CONNECTION_STRING: ${APPLICATIONINSIGHTS_CONNECTION_STRING:-}
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    restart: unless-stopped
+
+  # Off unless you ask for it: --profile generator
+  generator:
+    profiles: ["generator"]
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    # A twentieth of the configured load — about 300 MB an hour. Every other setup in this repo runs the
+    # example as written, because writing to a container on your own machine is
+    # free; here each span is billed, so the default is a town that is clearly
+    # alive rather than one that is maximally busy. Raise it with
+    # `--rate 1` once you have seen what a day of it costs, or lower it further
+    # — the shape of the system is the same at any rate.
+    command:
+      ["examples/ecommerce.json", "--endpoint", "http://collector:4318", "--rate", "0.05"]
+    environment:
+      TRAFFIC_CONTROL_HOST: 0.0.0.0
+    ports:
+      - "8080:8080"
+    depends_on:
+      collector:
+        condition: service_started
+    restart: unless-stopped

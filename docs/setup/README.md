@@ -10,10 +10,15 @@ generator against it, and a backend to look at the results in.
 | **[Loki](loki.md)** | logs | `docker compose -f deploy/loki.yml --profile generator up -d` |
 | **[Tempo](tempo.md)** | traces | `docker compose -f deploy/tempo.yml --profile generator up -d` |
 | **[SigNoz](signoz.md)** | all three | `docker compose -f deploy/signoz.yml --profile generator up -d` |
+| **[Application Insights](appinsights.md)** | all three | `docker compose -f deploy/appinsights.yml --profile generator up -d` |
 | **[Everything](all.md)** | all three | `docker compose -f deploy/all.yml --profile generator up -d` |
 
 New to this? Start with **Jaeger** — two containers, and traces are the signal
 that shows the shape of the system.
+
+Application Insights is the odd one out: its backend is Azure rather than a
+container, so it needs a subscription and it costs money by the gigabyte. Its
+page starts with how to set both up.
 
 ## Things that apply to all of them
 
