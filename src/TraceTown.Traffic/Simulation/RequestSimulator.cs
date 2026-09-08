@@ -553,6 +553,14 @@ public sealed class RequestSimulator(Topology topology, FaultBoard faults, Simul
         };
 
         span.Add(SemConv.Messaging.System, subscription.Queue.Config.Queue?.System ?? "kafka")
+            // The broker this consumer is attached to. The producer span on the
+            // other side of the queue has carried it all along; without it here
+            // the hop is only half described, and a backend that builds its
+            // service map from attributes rather than from trace structure —
+            // Application Insights maps a consumer span to an inbound request
+            // and reads `server.address` as its source — sees a worker fed by
+            // nothing at all.
+            .Add(SemConv.Network.ServerAddress, subscription.Queue.Id)
             .Add(SemConv.Messaging.OperationName, "process")
             .Add(SemConv.Messaging.OperationType, "process")
             .Add(SemConv.Messaging.DestinationName, destination)
