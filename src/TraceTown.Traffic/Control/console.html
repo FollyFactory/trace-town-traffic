@@ -1,0 +1,648 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>trace-town-traffic</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --panel-2: #1c232c; --line: #2a323d;
+    --text: #d7dee7; --dim: #8b97a6; --faint: #5d6875;
+    --accent: #4da3ff; --ok: #3fb950; --warn: #d29922; --bad: #f85149;
+    --server: #4da3ff; --client: #a371f7; --producer: #d29922; --consumer: #3fb950;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 13px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  header {
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    padding: 12px 18px; background: var(--panel); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  header h1 span { color: var(--dim); font-weight: 400; }
+  .stats { display: flex; gap: 16px; margin-left: auto; flex-wrap: wrap; }
+  .stat { text-align: right; min-width: 74px; }
+  .stat b { display: block; font-size: 17px; font-variant-numeric: tabular-nums; }
+  .stat s { display: block; font-size: 10px; color: var(--faint); text-transform: uppercase;
+            letter-spacing: .8px; text-decoration: none; }
+
+  main { display: grid; grid-template-columns: 320px 1fr 300px; gap: 14px; padding: 14px; align-items: start; }
+  @media (max-width: 1200px) { main { grid-template-columns: 1fr; } }
+
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 14px; }
+  section > h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .9px; color: var(--dim);
+    margin: 0; padding: 10px 12px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 8px;
+  }
+  section > h2 em { margin-left: auto; font-style: normal; color: var(--faint); font-size: 10px; }
+  .body { padding: 12px; }
+
+  button {
+    font: inherit; color: var(--text); background: var(--panel-2);
+    border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); color: #fff; }
+  button.on { background: var(--accent); border-color: var(--accent); color: #07101c; font-weight: 600; }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  button.wide { width: 100%; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  input, select {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; width: 100%;
+  }
+  input[type=range] { padding: 0; background: none; border: none; }
+  label { display: block; font-size: 11px; color: var(--dim); margin: 10px 0 3px; }
+  label:first-child { margin-top: 0; }
+  .knob { display: flex; align-items: center; gap: 8px; }
+  .knob output { font-variant-numeric: tabular-nums; min-width: 52px; text-align: right; color: var(--accent); }
+
+  .scen { display: grid; gap: 6px; }
+  .scen button { text-align: left; }
+  .scen button small { display: block; color: var(--faint); font-size: 11px; margin-top: 2px; }
+  .scen button.on small { color: #0b2038; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; font-weight: 500; color: var(--faint); font-size: 10px;
+       text-transform: uppercase; letter-spacing: .6px; padding: 0 6px 6px; }
+  td { padding: 4px 6px; border-top: 1px solid var(--line); vertical-align: middle; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  .kind { display: inline-block; font-size: 9px; text-transform: uppercase; letter-spacing: .5px;
+          padding: 1px 5px; border-radius: 3px; background: var(--panel-2); color: var(--dim); }
+
+  #feed { max-height: 62vh; overflow-y: auto; }
+  .trace { border-top: 1px solid var(--line); padding: 6px 10px; cursor: pointer; display: flex;
+           gap: 10px; align-items: baseline; font-size: 12px; }
+  .trace:first-child { border-top: none; }
+  .trace:hover { background: var(--panel-2); }
+  .trace .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .trace .ms { font-variant-numeric: tabular-nums; color: var(--dim); }
+  .trace.bad .nm { color: var(--bad); }
+  .trace .flow { color: var(--faint); font-size: 11px; }
+  .trace.new { animation: flash .6s ease-out; }
+  @keyframes flash { from { background: rgba(77,163,255,.18); } to { background: transparent; } }
+
+  .tree { padding: 8px 10px 12px; background: var(--bg); border-top: 1px solid var(--line); }
+  .span { display: flex; align-items: center; gap: 8px; font-size: 11.5px; padding: 1px 0; }
+  .span .lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .span .svc { color: var(--faint); font-size: 10.5px; }
+  .span .bar { height: 8px; border-radius: 2px; background: var(--accent); opacity: .75; min-width: 2px; }
+  .span .d { color: var(--dim); font-variant-numeric: tabular-nums; font-size: 10.5px; margin-left: auto; }
+  .span.err .lbl { color: var(--bad); }
+  .span .virt { color: var(--faint); font-size: 10px; font-style: italic; }
+
+  .fault { border-top: 1px solid var(--line); padding: 7px 0; font-size: 12px; }
+  .fault:first-child { border-top: none; }
+  .fault .t { display: flex; gap: 6px; align-items: baseline; }
+  .fault .t b { font-weight: 600; }
+  .fault .meta { color: var(--faint); font-size: 11px; }
+  .bar-mini { height: 3px; background: var(--panel-2); border-radius: 2px; margin-top: 4px; overflow: hidden; }
+  .bar-mini i { display: block; height: 100%; background: var(--warn); }
+
+  .empty { color: var(--faint); font-size: 12px; padding: 14px 12px; text-align: center; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: var(--ok); }
+  .dot.paused { background: var(--warn); }
+  .dot.dead { background: var(--bad); }
+  #toast {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 8px 14px; font-size: 12px; opacity: 0; transition: opacity .2s; pointer-events: none;
+  }
+  #toast.show { opacity: 1; }
+  #toast.bad { border-color: var(--bad); color: var(--bad); }
+</style>
+
+<header>
+  <h1><span class="dot" id="live"></span> <span id="town">trace-town-traffic</span></h1>
+  <span class="mono" style="color:var(--faint);font-size:11px" id="endpoint"></span>
+  <div class="stats">
+    <div class="stat"><b id="s-rps">–</b><s>req/sec</s></div>
+    <div class="stat"><b id="s-err">–</b><s>errors</s></div>
+    <div class="stat"><b id="s-spans">–</b><s>spans/sec</s></div>
+    <div class="stat"><b id="s-total">–</b><s>requests</s></div>
+    <div class="stat"><b id="s-up">–</b><s>uptime</s></div>
+  </div>
+  <button id="pause">Pause</button>
+</header>
+
+<main>
+  <div>
+    <section>
+      <h2>Scenarios</h2>
+      <div class="body scen" id="scenarios"></div>
+      <div class="body" style="padding-top:0">
+        <button class="wide" id="stop-scenario">Stop scenario</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Simulation</h2>
+      <div class="body">
+        <label>Rate multiplier — every flow at once</label>
+        <div class="knob">
+          <input type="range" id="rate" min="0" max="20" step="0.1" value="1">
+          <output id="rate-v">1.0×</output>
+        </div>
+        <label>Trace sample ratio — metrics are always 100%</label>
+        <div class="knob">
+          <input type="range" id="sample" min="0" max="1" step="0.01" value="0.1">
+          <output id="sample-v">10%</output>
+        </div>
+        <p style="color:var(--faint);font-size:11px;margin:10px 0 0">
+          Failures are sampled separately, at <span id="err-ratio">100%</span>, so a rare
+          error still reaches your backend.
+        </p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Flows <em id="flow-count"></em></h2>
+      <div class="body" id="flows"></div>
+    </section>
+  </div>
+
+  <div>
+    <section>
+      <h2>Live activity
+        <button id="only-errors" style="padding:2px 8px;font-size:11px">Errors only</button>
+        <button id="freeze" style="padding:2px 8px;font-size:11px">Freeze</button>
+        <em id="feed-note">click a trace to open it</em>
+      </h2>
+      <div id="feed"><div class="empty">waiting for traffic…</div></div>
+    </section>
+
+    <section>
+      <h2>Services <em>click to break one</em></h2>
+      <div class="body" style="padding:8px 12px 12px">
+        <table>
+          <thead><tr><th>Service</th><th>Kind</th><th style="text-align:right">Break it</th></tr></thead>
+          <tbody id="services"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <div>
+    <section>
+      <h2>Active faults <em id="fault-count"></em></h2>
+      <div class="body" id="faults"></div>
+      <div class="body" style="padding-top:0">
+        <button class="wide danger" id="clear-faults">Clear all faults</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Inject a fault</h2>
+      <div class="body">
+        <label>Target</label>
+        <input id="f-target" list="targets" placeholder="postgres-* or flow:checkout">
+        <datalist id="targets"></datalist>
+
+        <label>Kind</label>
+        <select id="f-kind">
+          <option value="latency">latency — make it slower</option>
+          <option value="errors">errors — make it fail</option>
+          <option value="outage">outage — refuse connections</option>
+          <option value="saturation">saturation — exhaust its resources</option>
+          <option value="queueLag">queueLag — back the queue up</option>
+          <option value="traffic">traffic — more load (targets a flow)</option>
+        </select>
+
+        <div id="f-params"></div>
+
+        <label>Ramp (optional)</label>
+        <input id="f-ramp" placeholder="30s">
+        <label>Duration — blank means until cleared</label>
+        <input id="f-duration" placeholder="2m">
+        <label>Coverage — fraction of replicas</label>
+        <div class="knob">
+          <input type="range" id="f-coverage" min="0.1" max="1" step="0.05" value="1">
+          <output id="f-coverage-v">100%</output>
+        </div>
+
+        <button class="wide on" id="inject" style="margin-top:12px">Inject</button>
+      </div>
+    </section>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let since = 0, prev = null, topology = null, currentScenario = null, paused = false;
+
+const toast = (msg, bad) => {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'show' + (bad ? ' bad' : '');
+  clearTimeout(t._t);
+  t._t = setTimeout(() => (t.className = ''), 2600);
+};
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || (body.errors && body.errors[0]) || res.statusText);
+  return body;
+}
+
+const post = (path, body) =>
+  api(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+const fmt = (n, d = 0) => n.toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+const dur = (s) => (s < 60 ? Math.round(s) + 's'
+  : s < 3600 ? Math.floor(s / 60) + 'm ' + Math.round(s % 60) + 's'
+  : Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm');
+
+// ── Live activity ────────────────────────────────────────────────────────────
+
+async function pollActivity() {
+  let data;
+  try {
+    data = await api(`/api/activity?since=${since}&limit=40`);
+    $('live').className = 'dot' + (data.paused ? ' paused' : '');
+  } catch {
+    $('live').className = 'dot dead';
+    return;
+  }
+
+  const now = performance.now();
+  if (prev) {
+    const dt = (now - prev.t) / 1000;
+    if (dt > 0.2) {
+      const dr = data.counts.requests - prev.requests;
+      const ds = data.counts.spans - prev.spans;
+      $('s-rps').textContent = fmt(dr / dt, 1);
+      $('s-spans').textContent = fmt(ds / dt, 1);
+    }
+  }
+  prev = { t: now, requests: data.counts.requests, spans: data.counts.spans };
+
+  const errPct = data.counts.requests ? (data.counts.errors / data.counts.requests) * 100 : 0;
+  $('s-err').textContent = fmt(errPct, 2) + '%';
+  $('s-err').style.color = errPct > 5 ? 'var(--bad)' : errPct > 1 ? 'var(--warn)' : 'var(--text)';
+  $('s-total').textContent = fmt(data.counts.requests);
+  $('s-up').textContent = dur(data.uptimeSeconds);
+
+  if (data.traces.length) {
+    since = data.latest;
+    for (const t of data.traces) buffer.unshift(t);
+    buffer.length = Math.min(buffer.length, 250);
+    if (frozen()) $('feed-note').textContent = `${buffer.length - shown} new — frozen`;
+    else prependNew(data.traces);
+  }
+}
+
+// The feed is a view over `buffer`, not a pile of appended nodes. That is what
+// lets it be frozen and filtered without throwing away what has already
+// arrived — and a feed that keeps shoving the trace you are reading off the
+// bottom of the screen is worse than no feed at all.
+let buffer = [], shown = 0, manualFreeze = false, openSeq = null, errorsOnly = false;
+const frozen = () => manualFreeze || openSeq !== null;
+
+/**
+ * Adds only what has just arrived. Rebuilding the whole list every second would
+ * be simpler, and would destroy any text you had selected once a second.
+ */
+function prependNew(arrived) {
+  const feed = $('feed');
+  if (feed.firstElementChild && feed.firstElementChild.className === 'empty') feed.innerHTML = '';
+  shown = buffer.length;
+
+  for (const t of arrived) {
+    if (errorsOnly && !t.failed) continue;
+    feed.prepend(renderTrace(t));
+  }
+  trim(feed);
+}
+
+/** Full rebuild, for when the filter or the freeze changes what should be on screen. */
+function renderFeed() {
+  const feed = $('feed');
+  const visible = buffer.filter((t) => !errorsOnly || t.failed).slice(0, 120);
+  shown = buffer.length;
+  $('feed-note').textContent = frozen() ? 'frozen — click the open trace to release' : 'click a trace to open it';
+
+  if (!visible.length) {
+    feed.innerHTML = `<div class="empty">${errorsOnly ? 'no failures in the last few hundred requests' : 'waiting for traffic…'}</div>`;
+    return;
+  }
+
+  feed.innerHTML = '';
+  for (const t of visible) {
+    feed.append(renderTrace(t));
+    if (t.seq === openSeq) feed.append(renderTree(t));
+  }
+}
+
+function renderTree(t) {
+  const tree = document.createElement('div');
+  tree.className = 'tree';
+  tree.innerHTML = renderSpan(t.tree, 0, Math.max(1, spanEnd(t.tree)));
+  return tree;
+}
+
+function trim(feed) {
+  while (feed.children.length > 140) feed.lastElementChild.remove();
+}
+
+function renderTrace(t) {
+  const el = document.createElement('div');
+  el.className = 'trace new' + (t.failed ? ' bad' : '');
+  el.innerHTML =
+    `<span class="kind">${t.failed ? t.errorType || 'error' : 'ok'}</span>` +
+    `<span class="nm">${esc(t.root)}</span>` +
+    `<span class="flow">${esc(t.flow)} · ${t.spans} spans${t.sampled ? '' : ' · not traced'}</span>` +
+    `<span class="ms">${fmt(t.durationMs, 1)} ms</span>`;
+  el.onclick = () => {
+    openSeq = openSeq === t.seq ? null : t.seq;
+    renderFeed();
+  };
+  if (t.seq === openSeq) el.style.background = 'var(--panel-2)';
+  setTimeout(() => el.classList.remove('new'), 700);
+  return el;
+}
+
+const spanEnd = (s) => Math.max(s.startMs + s.durationMs, ...s.children.map(spanEnd));
+
+function renderSpan(s, depth, total) {
+  const left = (s.startMs / total) * 100;
+  const width = Math.max(0.4, (s.durationMs / total) * 100);
+  const colour = { server: 'var(--server)', client: 'var(--client)',
+                   producer: 'var(--producer)', consumer: 'var(--consumer)' }[s.kind] || 'var(--faint)';
+  return `<div class="span${s.failed ? ' err' : ''}" style="padding-left:${depth * 13}px">
+      <span class="kind" style="color:${colour}">${s.kind}</span>
+      <span class="lbl">${esc(s.name)} <span class="svc">${esc(s.service)}</span>
+        ${s.uninstrumented ? `<span class="virt">→ ${esc(s.peer)} (no server span)</span>` : ''}
+        ${s.failed ? `<span class="virt" style="color:var(--bad)">${esc(s.errorType || '')}</span>` : ''}</span>
+      <span class="d">${fmt(s.durationMs, 1)} ms</span>
+    </div>
+    <div style="margin:0 0 3px ${depth * 13}px"><span class="bar" style="margin-left:${left}%;width:${width}%;background:${colour};display:block"></span></div>
+    ${s.children.map((c) => renderSpan(c, depth + 1, total)).join('')}`;
+}
+
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ── Everything else ──────────────────────────────────────────────────────────
+
+async function pollState() {
+  try {
+    const [status, scenarios, faults, flows] = await Promise.all([
+      api('/api/status'), api('/api/scenarios'), api('/api/faults'), api('/api/flows'),
+    ]);
+    if (!topology) { topology = await api('/api/topology'); renderServices(); }
+
+    $('town').textContent = status.town + ' · ' + status.environment;
+    $('endpoint').textContent = status.exporter.endpoint;
+    $('err-ratio').textContent = fmt(status.simulation.errorTraceSampleRatio * 100, 0) + '%';
+
+    paused = status.paused;
+    $('pause').textContent = paused ? 'Resume' : 'Pause';
+    $('pause').className = paused ? 'on' : '';
+
+    if (document.activeElement !== $('rate')) {
+      $('rate').value = status.simulation.rateMultiplier;
+      $('rate-v').textContent = fmt(status.simulation.rateMultiplier, 1) + '×';
+    }
+    if (document.activeElement !== $('sample')) {
+      $('sample').value = status.simulation.traceSampleRatio;
+      $('sample-v').textContent = fmt(status.simulation.traceSampleRatio * 100, 0) + '%';
+    }
+
+    currentScenario = status.scenario.current;
+    renderScenarios(scenarios, status.scenario);
+    renderFaults(faults);
+    renderFlows(flows);
+  } catch (e) { /* the next tick will retry */ }
+}
+
+let scenarioKey = null;
+
+function renderScenarios(list, current) {
+  const el = $('scenarios');
+  if (!list.length) { el.innerHTML = '<div class="empty">no scenarios in this config</div>'; return; }
+
+  // Rebuilding on every poll would pull the button out from under a click.
+  const key = list.map((s) => s.id).join('|');
+  if (key !== scenarioKey) {
+    scenarioKey = key;
+    el.innerHTML = '';
+    for (const s of list) {
+      const b = document.createElement('button');
+      b.dataset.id = s.id;
+      b.innerHTML = `<span class="t"></span><small>${esc(s.description || s.steps + ' steps')}</small>`;
+      b.onclick = async () => {
+        try { await post('/api/scenarios/' + encodeURIComponent(s.id), {}); toast('Scenario: ' + s.id); pollState(); }
+        catch (e) { toast(e.message, true); }
+      };
+      el.append(b);
+    }
+  }
+
+  for (const b of el.children) {
+    const running = b.dataset.id === current.current;
+    b.className = running ? 'on' : '';
+    b.querySelector('.t').textContent =
+      b.dataset.id + (running && current.nextStepAt ? ` · next at ${current.nextStepAt}` : '');
+  }
+}
+
+const flowEls = new Map();
+
+function renderFlows(flows) {
+  const el = $('flows');
+  $('flow-count').textContent = flows.length + ' flows';
+
+  for (const f of flows) {
+    let parts = flowEls.get(f.id);
+    if (!parts) {
+      const wrap = document.createElement('div');
+      wrap.style.marginBottom = '12px';
+      const label = document.createElement('label');
+      label.style.marginTop = '0';
+      const knob = document.createElement('div');
+      knob.className = 'knob';
+      const range = document.createElement('input');
+      range.type = 'range';
+      range.min = 0;
+      range.max = Math.max(20, f.configuredRps * 8);
+      range.step = 0.5;
+      range.value = f.effectiveRps;
+      const out = document.createElement('output');
+      range.oninput = () => (out.textContent = fmt(+range.value, 1) + '/s');
+      range.onchange = async () => {
+        try { await post(`/api/flows/${encodeURIComponent(f.id)}/rate`, { rps: +range.value }); }
+        catch (e) { toast(e.message, true); }
+      };
+      knob.append(range, out);
+      wrap.append(label, knob);
+      el.append(wrap);
+      parts = { label, range, out };
+      flowEls.set(f.id, parts);
+    }
+
+    parts.label.innerHTML = `${esc(f.id)} <span style="color:var(--faint)">${esc(f.route || '')} · ${
+      fmt(f.errors)} errors${f.trafficMultiplier !== 1 ? ` · fault ×${fmt(f.trafficMultiplier, 1)}` : ''}</span>`;
+
+    // Leave the slider alone while it is being dragged, or the poll fights the
+    // hand holding it.
+    if (document.activeElement !== parts.range) {
+      parts.range.value = f.effectiveRps;
+      parts.out.textContent = fmt(f.effectiveRps, 1) + '/s';
+    }
+  }
+}
+
+let faultKey = null;
+
+function renderFaults(faults) {
+  const el = $('faults');
+  $('fault-count').textContent = faults.length ? faults.length + ' active' : '';
+  if (!faults.length) { faultKey = null; el.innerHTML = '<div class="empty">nothing is broken</div>'; return; }
+
+  // The ✕ buttons are small targets; rebuilding under the cursor loses clicks.
+  const key = faults.map((f) => f.id).join('|');
+  if (key === faultKey) {
+    for (const [i, f] of faults.entries()) {
+      const meta = el.children[i] && el.children[i].querySelector('.meta');
+      if (meta) {
+        meta.textContent = `${f.origin} · ${fmt(f.ageSeconds, 0)}s` +
+          (f.expiresIn != null ? ` · ${fmt(f.expiresIn, 0)}s left` : '') +
+          (f.because ? ' · ' + f.because : '');
+      }
+      const bar = el.children[i] && el.children[i].querySelector('.bar-mini i');
+      if (bar) bar.style.width = f.intensity * 100 + '%';
+    }
+    return;
+  }
+
+  faultKey = key;
+  el.innerHTML = '';
+  for (const f of faults) {
+    const d = document.createElement('div');
+    d.className = 'fault';
+    d.innerHTML = `<div class="t"><b>${esc(f.kind)}</b>
+        <span class="mono" style="color:var(--dim)">${esc(f.target)}</span>
+        <button style="margin-left:auto;padding:1px 6px;font-size:11px" title="remove">✕</button></div>
+      <div class="meta">${esc(f.origin)} · ${fmt(f.ageSeconds, 0)}s${
+        f.expiresIn != null ? ` · ${fmt(f.expiresIn, 0)}s left` : ''}${f.because ? ' · ' + esc(f.because) : ''}</div>
+      ${f.intensity < 1 ? `<div class="bar-mini"><i style="width:${f.intensity * 100}%"></i></div>` : ''}`;
+    d.querySelector('button').onclick = async () => {
+      try { await api('/api/faults/' + f.id, { method: 'DELETE' }); pollState(); } catch (e) { toast(e.message, true); }
+    };
+    el.append(d);
+  }
+}
+
+function renderServices() {
+  const tbody = $('services'), dl = $('targets');
+  tbody.innerHTML = ''; dl.innerHTML = '';
+  for (const s of topology.services) {
+    dl.append(new Option(s.id));
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="mono">${esc(s.id)}${s.instances > 1 ? `<span style="color:var(--faint)"> ×${s.instances}</span>` : ''}</td>
+                    <td><span class="kind">${esc(s.kind)}</span></td>`;
+    const td = document.createElement('td');
+    td.style.textAlign = 'right';
+    for (const [label, fault] of [
+      ['slow', { kind: 'latency', multiplier: 15, ramp: '20s' }],
+      ['fail', { kind: 'errors', errorRate: 0.4 }],
+      ['down', { kind: 'outage' }],
+    ]) {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = 'padding:1px 7px;font-size:11px;margin-left:4px';
+      b.onclick = async () => {
+        try { await post('/api/faults', { target: s.id, ...fault }); toast(`${s.id}: ${fault.kind}`); pollState(); }
+        catch (e) { toast(e.message, true); }
+      };
+      td.append(b);
+    }
+    tr.append(td);
+    tbody.append(tr);
+  }
+  for (const f of topology.services.length ? (window.__flows || []) : []) dl.append(new Option('flow:' + f));
+}
+
+// ── Fault form ───────────────────────────────────────────────────────────────
+
+const PARAMS = {
+  latency:    [['multiplier', 'Multiplier', 10], ['p99Ms', 'Absolute p99 ms (optional)', '']],
+  errors:     [['errorRate', 'Error rate 0–1', 0.4]],
+  outage:     [],
+  saturation: [],
+  queueLag:   [['lagMs', 'Lag ms', 30000]],
+  traffic:    [['multiplier', 'Multiplier', 5]],
+};
+
+function renderParams() {
+  const kind = $('f-kind').value;
+  $('f-params').innerHTML = PARAMS[kind]
+    .map(([id, label, val]) => `<label>${label}</label><input id="p-${id}" value="${val}">`).join('') ||
+    '<p style="color:var(--faint);font-size:11px;margin:10px 0 0">No parameters — it either is or it is not.</p>';
+  if (kind === 'traffic' && !$('f-target').value.startsWith('flow:')) $('f-target').value = 'flow:';
+}
+
+$('f-kind').onchange = renderParams;
+$('f-coverage').oninput = () => ($('f-coverage-v').textContent = fmt($('f-coverage').value * 100, 0) + '%');
+
+$('inject').onclick = async () => {
+  const kind = $('f-kind').value;
+  const body = { target: $('f-target').value.trim(), kind };
+  for (const [id] of PARAMS[kind]) {
+    const v = $('p-' + id).value.trim();
+    if (v !== '') body[id] = +v;
+  }
+  if ($('f-ramp').value.trim()) body.ramp = $('f-ramp').value.trim();
+  if ($('f-duration').value.trim()) body.duration = $('f-duration').value.trim();
+  if (+$('f-coverage').value < 1) body.coverage = +$('f-coverage').value;
+  if (!body.target) { toast('Pick a target', true); return; }
+  try { await post('/api/faults', body); toast('Injected'); pollState(); }
+  catch (e) { toast(e.message, true); }
+};
+
+$('clear-faults').onclick = async () => {
+  try { const r = await api('/api/faults', { method: 'DELETE' }); toast(`Cleared ${r.removed}`); pollState(); }
+  catch (e) { toast(e.message, true); }
+};
+
+$('stop-scenario').onclick = async () => {
+  try { await api('/api/scenarios/current', { method: 'DELETE' }); toast('Scenario stopped'); pollState(); }
+  catch (e) { toast(e.message, true); }
+};
+
+$('pause').onclick = async () => {
+  try { const r = await post('/api/simulation', { paused: !paused }); paused = r.paused; pollState(); }
+  catch (e) { toast(e.message, true); }
+};
+
+$('freeze').onclick = () => {
+  manualFreeze = !manualFreeze;
+  $('freeze').className = manualFreeze ? 'on' : '';
+  $('freeze').textContent = manualFreeze ? 'Frozen' : 'Freeze';
+  if (!manualFreeze) { openSeq = null; renderFeed(); }
+};
+
+$('only-errors').onclick = () => {
+  errorsOnly = !errorsOnly;
+  $('only-errors').className = errorsOnly ? 'on' : '';
+  renderFeed();
+};
+
+$('rate').oninput = () => ($('rate-v').textContent = fmt($('rate').value, 1) + '×');
+$('rate').onchange = () => post('/api/simulation', { rateMultiplier: +$('rate').value }).catch((e) => toast(e.message, true));
+$('sample').oninput = () => ($('sample-v').textContent = fmt($('sample').value * 100, 0) + '%');
+$('sample').onchange = () => post('/api/simulation', { traceSampleRatio: +$('sample').value }).catch((e) => toast(e.message, true));
+
+renderParams();
+pollState();
+pollActivity();
+setInterval(pollActivity, 1000);
+setInterval(pollState, 2500);
+</script>

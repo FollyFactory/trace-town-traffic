@@ -162,7 +162,7 @@ if (config.Control.Token is { Length: > 0 } token)
 {
     app.Use(async (context, next) =>
     {
-        if (context.Request.Path.StartsWithSegments("/healthz"))
+        if (context.Request.Path.StartsWithSegments("/healthz") || context.Request.Path == "/")
         {
             await next();
             return;

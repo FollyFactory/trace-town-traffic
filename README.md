@@ -114,6 +114,13 @@ Every field: **[configuration.md](docs/configuration.md)**.
 
 ## Break it on purpose
 
+Open **<http://localhost:8080>** for the console — scenario buttons, rate
+sliders, a `slow`/`fail`/`down` button on every service, and a live feed of the
+traces coming out, which you can click into a span waterfall.
+See [console.md](docs/console.md).
+
+Or from a terminal:
+
 ```bash
 curl -X POST localhost:8080/api/scenarios/cascade
 ```
@@ -130,6 +137,7 @@ glob targets, composed into timed scenarios.
 | | |
 |---|---|
 | [setup/](docs/setup/README.md) | One command per backend |
+| [console.md](docs/console.md) | The control panel at `localhost:8080` |
 | [telemetry-model.md](docs/telemetry-model.md) | What emits what, and why databases do not emit spans |
 | [configuration.md](docs/configuration.md) | Every field in the config file |
 | [scenarios.md](docs/scenarios.md) | Fault kinds, and writing your own |

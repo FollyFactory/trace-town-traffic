@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using TraceTown.Traffic.Configuration;
+using TraceTown.Traffic.Control;
 using TraceTown.Traffic.Diagnostics;
 using TraceTown.Traffic.Emit;
 using TraceTown.Traffic.Faults;
@@ -24,6 +25,9 @@ public sealed class Engine : IAsyncDisposable
     private readonly int _seed;
 
     private CancellationTokenSource? _cancellation;
+    private double _rateMultiplier;
+    private double _traceSampleRatio;
+    private int _paused;
 
     public Engine(TrafficConfig config, ILoggerFactory loggerFactory)
     {
@@ -34,6 +38,9 @@ public sealed class Engine : IAsyncDisposable
         Topology = new Topology(config);
         Faults = new FaultBoard(Topology);
         Scenarios = new ScenarioRunner(Topology, Faults, loggerFactory.CreateLogger<ScenarioRunner>());
+
+        _rateMultiplier = config.Simulation.RateMultiplier;
+        _traceSampleRatio = config.Simulation.TraceSampleRatio;
 
         _emitter = new TelemetryEmitter(Topology, config);
         _simulator = new RequestSimulator(Topology, Faults, config.Simulation);
@@ -52,6 +59,39 @@ public sealed class Engine : IAsyncDisposable
     public FaultBoard Faults { get; }
 
     public ScenarioRunner Scenarios { get; }
+
+    /// <summary>A short tail of what has just been produced, for the console.</summary>
+    public ActivityLog Activity { get; } = new();
+
+    /// <summary>
+    /// Scales every flow. Live, because the most useful thing to do to a running
+    /// simulation is turn it up.
+    /// </summary>
+    public double RateMultiplier
+    {
+        get => Volatile.Read(ref _rateMultiplier);
+        set => Volatile.Write(ref _rateMultiplier, Math.Max(0, value));
+    }
+
+    /// <summary>
+    /// Fraction of successful requests that produce spans. Failures keep their
+    /// own ratio from the config, since sampling those down defeats the point.
+    /// </summary>
+    public double TraceSampleRatio
+    {
+        get => Volatile.Read(ref _traceSampleRatio);
+        set => Volatile.Write(ref _traceSampleRatio, Math.Clamp(value, 0, 1));
+    }
+
+    /// <summary>
+    /// Stops generating without tearing anything down. Scenarios and faults keep
+    /// running, so you can set a state up and then release the traffic into it.
+    /// </summary>
+    public bool Paused
+    {
+        get => Volatile.Read(ref _paused) == 1;
+        set => Volatile.Write(ref _paused, value ? 1 : 0);
+    }
 
     public DateTimeOffset StartedAt { get; private set; }
 
@@ -106,13 +146,18 @@ public sealed class Engine : IAsyncDisposable
 
         while (await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
         {
+            if (Paused)
+            {
+                continue;
+            }
+
             DateTimeOffset now = DateTimeOffset.UtcNow;
 
             double rate = _rateOverrides.TryGetValue(flow.Id, out double over) ? over : flow.Rps;
             double expected = rate
                 * profile.Multiplier(now)
                 * Faults.TrafficMultiplier(flow.Id, now)
-                * Config.Simulation.RateMultiplier
+                * RateMultiplier
                 * tickSeconds;
 
             int count = rng.NextPoisson(expected);
@@ -126,6 +171,7 @@ public sealed class Engine : IAsyncDisposable
 
                 _emitter.Emit(request);
                 stats.Record(request.Failed);
+                Activity.Record(request);
             }
 
             long elapsed = Environment.TickCount64 - started;
@@ -163,6 +209,11 @@ public sealed class Engine : IAsyncDisposable
                 return;
             }
 
+            if (Paused)
+            {
+                continue;
+            }
+
             DateTimeOffset now = DateTimeOffset.UtcNow;
             SimulatedRequest request = _simulator.SimulateCron(service, rng, now);
             request.Sampled = ShouldSample(request, rng);
@@ -170,6 +221,7 @@ public sealed class Engine : IAsyncDisposable
 
             _emitter.Emit(request);
             _stats[flowId].Record(request.Failed);
+            Activity.Record(request);
         }
     }
 
@@ -192,12 +244,9 @@ public sealed class Engine : IAsyncDisposable
     /// almost never catch one.
     /// </summary>
     private bool ShouldSample(SimulatedRequest request, Rng rng)
-    {
-        SimulationConfig simulation = Config.Simulation;
-        return request.Failed
-            ? rng.Chance(simulation.ErrorTraceSampleRatio)
-            : rng.Chance(simulation.TraceSampleRatio);
-    }
+        => request.Failed
+            ? rng.Chance(Config.Simulation.ErrorTraceSampleRatio)
+            : rng.Chance(TraceSampleRatio);
 
     /// <summary>Overrides a flow's rate until the next override or a restart.</summary>
     public bool SetFlowRate(string flowId, double rps)

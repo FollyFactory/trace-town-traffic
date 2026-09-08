@@ -21,6 +21,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Embedded rather than copied, so the console travels inside the binary
+         and the container needs nothing mounted to serve it. -->
+    <EmbeddedResource Include="Control/console.html" LogicalName="console.html" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="../../examples/**/*.json" CopyToOutputDirectory="PreserveNewest" LinkBase="examples" />
   </ItemGroup>
 

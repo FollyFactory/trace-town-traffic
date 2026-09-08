@@ -18,6 +18,8 @@ public static class ControlApi
 {
     public static void MapControlApi(this IEndpointRouteBuilder app, Engine engine)
     {
+        app.MapGet("/", () => Results.Content(ConsolePage.Page, "text/html; charset=utf-8"));
+
         app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 
         app.MapGet("/api/status", () =>
@@ -53,6 +55,8 @@ public static class ControlApi
                     nextStepAt = engine.Scenarios.NextStepAt,
                 },
                 faults = engine.Faults.Snapshot().Count,
+                paused = engine.Paused,
+                simulation = Simulation(engine),
             });
         });
 
@@ -60,6 +64,79 @@ public static class ControlApi
         MapScenarios(app, engine);
         MapFaults(app, engine);
         MapFlows(app, engine);
+        MapSimulation(app, engine);
+        MapActivity(app, engine);
+    }
+
+    /// <summary>The knobs that apply to the whole run rather than to one thing.</summary>
+    private static void MapSimulation(IEndpointRouteBuilder app, Engine engine)
+    {
+        app.MapGet("/api/simulation", () => Results.Ok(Simulation(engine)));
+
+        app.MapPost("/api/simulation", (SimulationRequest body) =>
+        {
+            if (body.RateMultiplier is { } rate)
+            {
+                if (rate < 0)
+                {
+                    return Results.BadRequest(new { error = "rateMultiplier cannot be negative." });
+                }
+
+                engine.RateMultiplier = rate;
+            }
+
+            if (body.TraceSampleRatio is { } ratio)
+            {
+                if (ratio is < 0 or > 1)
+                {
+                    return Results.BadRequest(new { error = "traceSampleRatio must be between 0 and 1." });
+                }
+
+                engine.TraceSampleRatio = ratio;
+            }
+
+            if (body.Paused is { } paused)
+            {
+                engine.Paused = paused;
+            }
+
+            return Results.Ok(Simulation(engine));
+        });
+    }
+
+    private static object Simulation(Engine engine) => new
+    {
+        rateMultiplier = engine.RateMultiplier,
+        traceSampleRatio = engine.TraceSampleRatio,
+        errorTraceSampleRatio = engine.Config.Simulation.ErrorTraceSampleRatio,
+        paused = engine.Paused,
+        seed = engine.Config.Simulation.Seed,
+    };
+
+    /// <summary>
+    /// A tail of what has just been produced. The console polls this with the
+    /// highest sequence number it has seen, so it never re-reads a trace and
+    /// never misses one between polls.
+    /// </summary>
+    private static void MapActivity(IEndpointRouteBuilder app, Engine engine)
+    {
+        app.MapGet("/api/activity", (long? since, int? limit) =>
+        {
+            EngineStats stats = engine.Stats();
+            return Results.Ok(new
+            {
+                latest = engine.Activity.Latest,
+                traces = engine.Activity.Since(since ?? 0, Math.Clamp(limit ?? 60, 1, 200)),
+                counts = new
+                {
+                    requests = stats.Requests,
+                    errors = stats.Errors,
+                    spans = stats.Spans,
+                },
+                uptimeSeconds = Math.Round(stats.Uptime.TotalSeconds, 1),
+                paused = engine.Paused,
+            });
+        });
     }
 
     private static void MapTopology(IEndpointRouteBuilder app, Engine engine)
@@ -242,3 +319,6 @@ public static class ControlApi
 }
 
 public sealed record RateRequest(double Rps);
+
+/// <summary>All optional: send only the knobs you are turning.</summary>
+public sealed record SimulationRequest(double? RateMultiplier, double? TraceSampleRatio, bool? Paused);

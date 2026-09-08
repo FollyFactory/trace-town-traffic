@@ -14,7 +14,8 @@ curl -X POST localhost:8080/api/flows/checkout/rate \
   -H 'Content-Type: application/json' -d '{"rps":200}'
 ```
 
-Bound to `127.0.0.1` with no auth unless you set `control.token`.
+Bound to `127.0.0.1` with no auth unless you set `control.token`. There is a
+[console](console.md) on the same port with buttons for all of it.
 
 ---
 
