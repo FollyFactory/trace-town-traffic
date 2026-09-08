@@ -113,18 +113,11 @@ dependencies
 
 Twenty rows, one per edge, and it is the whole system.
 
-## Two corrections, and why they are not optional
+## One correction, and why it is not optional
 
 `deploy/config/collector-appinsights.yaml` runs a transform processor before
 the exporter. Without it the data arrives and looks fine until you try to draw
-a service map out of it, at which point nothing joins to anything.
-
-**Role names carry the group.** The exporter builds `cloud_RoleName` as
-`service.namespace + "." + service.name`, and the generator sets
-`service.namespace` from a service's `group`. So the services arrive as
-`orders.checkout-api` — while a dependency's `target` is the bare hostname,
-`checkout-api`. Every edge would point at a name no service has. Dropping the
-namespace makes both ends agree.
+a service map out of it, at which point most of it points at nothing.
 
 **Database and queue dependencies have no target at all.** This is an upstream
 bug: for database and messaging spans the exporter reads `client.address`, and
@@ -134,11 +127,29 @@ falls back to `network.peer.address` — but a client span carries
 perfect while every database, cache and queue edge points at the empty string.
 Copying `server.address` onto `network.peer.address` fixes it.
 
-With both applied, `examples/ecommerce.json` produces 19 services and 20 edges,
+With it applied, `examples/ecommerce.json` produces 19 services and 20 edges,
 no empty targets, and the only two targets without a service of their own are
 `stripe` and `sendgrid` — which is correct. They are `external`, so nothing
 about them is instrumented from the inside, and an edge pointing at one is all
 you will ever see.
+
+## The one that got fixed somewhere better
+
+There used to be a second correction here, deleting `service.namespace`.
+
+Application Insights has no field for a namespace, so the exporter folds it
+into the identity: `cloud_RoleName` is `service.namespace + "." + service.name`,
+and the generator sets the namespace from a service's `group`. A dependency's
+`target` gets no such treatment and stays the bare hostname — so services
+arrived as `orders.checkout-api`, targets as `checkout-api`, and every edge
+pointed at a name no service had. Deleting the namespace made both ends agree
+and cost every neighbourhood in the town.
+
+Trace Town's Azure adapter now removes the prefix itself, using the namespace
+it reads back off the same row, so nothing here has to be sacrificed and the
+districts come through. If you are pointing this at something other than Trace
+Town and its service map comes up disconnected, this is the reason, and
+deleting `service.namespace` at the collector is still the fix.
 
 ## Reading it back with Trace Town
 

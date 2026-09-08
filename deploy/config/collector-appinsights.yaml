@@ -20,56 +20,45 @@ processors:
     timeout: 5s
     send_batch_size: 2048
 
-  # Two corrections, both of which are the difference between a service map
-  # that joins up and one that does not. Neither is optional, and neither is
-  # guesswork — the envelopes the exporter builds were captured and read.
+  # One correction, and it is not optional: without it most of the service map
+  # points at the empty string. It is not guesswork either — the envelopes the
+  # exporter builds were captured and read.
   transform/azure:
     error_mode: ignore
     trace_statements:
-      # 1. Application Insights' `cloud_RoleName` — the identity everything
-      #    downstream groups by — is built by the exporter as
-      #    `service.namespace + "." + service.name`, falling back to the bare
-      #    name only when there is no namespace. The generator sets
-      #    `service.namespace` from a service's `group`, so left alone every
-      #    role name reads `orders.checkout-api`.
+      # `target` is empty on every database, cache and queue dependency — which
+      # is most of the interesting ones. It is an upstream bug rather than
+      # anything missing here: fillRemoteDependencyDataDatabase and
+      # fillRemoteDependencyDataMessaging both read `client.address` and fall
+      # back to `network.peer.address`, when what a client span carries is
+      # `server.address`. HTTP is unaffected because it takes its target from
+      # `url.full` instead, which is why the http edges look fine and hide the
+      # problem.
       #
-      #    That on its own would only be ugly. What makes it wrong is the other
-      #    half: a dependency's `target` is the plain hostname, `checkout-api`,
-      #    with no group in it. So every edge would point at a name no service
-      #    has, and the service map would be a set of buildings with roads to
-      #    nowhere. Dropping the namespace makes the two ends agree.
-      - context: resource
-        statements:
-          - delete_key(resource.attributes, "service.namespace")
-      # 2. `target` is empty on every database, cache and queue dependency —
-      #    which is most of the interesting ones. It is an upstream bug rather
-      #    than anything missing here: fillRemoteDependencyDataDatabase and
-      #    fillRemoteDependencyDataMessaging both read `client.address` and
-      #    fall back to `network.peer.address`, when what a client span carries
-      #    is `server.address`. HTTP is unaffected because it takes its target
-      #    from `url.full` instead, which is why the http edges look fine and
-      #    hide the problem.
-      #
-      #    Copying the address onto the attribute the fallback does read gets
-      #    `postgres-orders` and `redis-sessions` into `target`. The port is
-      #    deliberately not copied: the exporter appends `client.port`, not the
-      #    peer port, so a bare address comes out formatted exactly like the
-      #    HTTP targets beside it.
+      # Copying the address onto the attribute the fallback does read gets
+      # `postgres-orders` and `redis-sessions` into `target`. The port is
+      # deliberately not copied: the exporter appends `client.port`, not the
+      # peer port, so a bare address comes out formatted exactly like the HTTP
+      # targets beside it.
       - context: span
         statements:
           - set(span.attributes["network.peer.address"], span.attributes["server.address"])
             where span.attributes["server.address"] != nil
               and span.attributes["network.peer.address"] == nil
-    # Role names are built the same way for metrics and logs, so the namespace
-    # has to go from those too or they will not join to the traces.
-    metric_statements:
-      - context: resource
-        statements:
-          - delete_key(resource.attributes, "service.namespace")
-    log_statements:
-      - context: resource
-        statements:
-          - delete_key(resource.attributes, "service.namespace")
+
+  # NOTE: `service.namespace` used to be deleted here as well.
+  #
+  # The exporter folds it into the identity — `cloud_RoleName` is
+  # `service.namespace + "." + service.name` — while a dependency's `target`
+  # stays the bare hostname, so the two ends of every edge stopped matching and
+  # deleting the namespace was the cheap fix. It cost the districts: a town that
+  # joined up and had no neighbourhoods in it.
+  #
+  # That trade is gone. Trace Town's Azure adapter now removes the prefix itself,
+  # using the namespace it reads back off the same row, so the identity is bare
+  # *and* the district survives. Leaving the namespace alone is also the right
+  # thing for everyone not reading this file, since it is what Azure's own
+  # Application Map groups by.
 
 exporters:
   # `azuremonitor`, not `azure_monitor`. Upstream renamed this component to
